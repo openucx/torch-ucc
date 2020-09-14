@@ -10,7 +10,8 @@ from torch import __version__ as torch_version
 
 ver_major, ver_minor = torch_version.split(".")[:2]
 ver_major = '-DTORCH_VER_MAJOR='+ver_major
-ver_minor = '-DTORCH_VER_MINOR='+ver_minor
+ver_minor = '-DTORCH_VER_MINOR=6'
+#ver_minor = '-DTORCH_VER_MINOR='+ver_minor
 
 ucc_plugin_dir = os.path.dirname(os.path.abspath(__file__))
 ucx_home = os.environ.get("UCX_HOME")
