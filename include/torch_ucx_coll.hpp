@@ -9,6 +9,7 @@
 #include <torch_ucc_status.hpp>
 #ifdef USE_CUDA
 #include <cuda_runtime.h>
+#include <ATen/cuda/CUDAEvent.h>
 #endif
 
 #include <ATen/ATen.h>
@@ -55,6 +56,9 @@ struct torch_ucx_coll_request_t {
     torch_ucx_request_t      **reqs;
     int                      n_sreqs;
     int                      n_rreqs;
+#ifdef USE_CUDA
+    at::cuda::CUDAEvent      cuda_event;
+#endif
 };
 
 torch_ucc_status_t torch_ucx_alltoall(void *coll_comm,

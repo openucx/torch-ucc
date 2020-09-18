@@ -89,6 +89,30 @@ torch_ucc_status_t torch_ucx_alltoall_progress(torch_ucx_coll_request_t *request
         total_reqs = chunk;
     }
     
+    if (request->n_sreqs == 0) {
+#ifdef USE_CUDA
+        if ((request->src_buf_mtype == TORCH_UCX_CUDA) && (!request->cuda_event.query())) {
+            /* input tensor is not ready */
+            return TORCH_UCC_OK;
+        }
+#endif
+        torch_ucx_memcpy((void*)(rbuf+data_size*group_rank), request->dst_buf_mtype,
+                         (void*)(sbuf+data_size*group_rank), request->src_buf_mtype,
+                         data_size, request->comm);
+        for (int step = 0; step < total_reqs; step++) {
+            int peer = get_recv_peer(group_rank, group_size, step, reverse);
+            torch_ucx_recv_nb(p2p_comm, (void*)(rbuf + peer * data_size), data_size,
+                            peer, tag, &request->reqs[step],
+                            TORCH_UCX_COLL_TAG);
+            peer = get_send_peer(group_rank, group_size, step, reverse);
+            torch_ucx_send_nb(p2p_comm, (void*)(sbuf + peer * data_size), data_size,
+                            peer, tag, &request->reqs[step + total_reqs],
+                            TORCH_UCX_COLL_TAG);
+        }
+        request->n_rreqs  = total_reqs;
+        request->n_sreqs  = total_reqs;
+    }
+
     n_polls = 0;
     while ((n_polls++ < max_polls) &&
            ((request->n_sreqs != group_size - 1) || (request->n_rreqs != group_size - 1))) {
@@ -138,6 +162,59 @@ torch_ucc_status_t torch_ucx_alltoall_progress(torch_ucx_coll_request_t *request
     return TORCH_UCC_OK;
 }
 
+torch_ucc_status_t torch_ucx_alltoall(void *coll_comm,
+                                      at::Tensor &input_tensor,
+                                      at::Tensor &output_tensor,
+                                      torch_ucc_coll_request_t **request)
+{
+    torch_ucx_coll_comm_t  *comm = (torch_ucx_coll_comm_t*)coll_comm;
+    torch_ucx_comm_t  *p2p_comm  = comm->p2p_comm;
+    int               group_size = p2p_comm->size;
+    ptrdiff_t         sbuf       = (ptrdiff_t)input_tensor.data_ptr();
+    ptrdiff_t         rbuf       = (ptrdiff_t)output_tensor.data_ptr();
+    size_t            data_size  = input_tensor.element_size()*input_tensor.numel()/
+                                   group_size;
+    uint32_t          tag        = comm->last_tag;
+    torch_ucx_coll_request_t *req;
+    int total_reqs;
+
+    req = new torch_ucx_coll_request_t;
+    std::vector<at::Tensor> input_tensors = {input_tensor};
+    std::vector<at::Tensor> output_tensors = {output_tensor};
+    torch_ucc_coll_request_init((torch_ucc_coll_request_t*)req,
+                                 &input_tensors,
+                                 &output_tensors);
+    req->len           = data_size;
+    req->src_buffer    = (void*)sbuf;
+    req->dst_buffer    = (void*)rbuf;
+    req->src_buf_mtype = (input_tensor.is_cuda() ? TORCH_UCX_CUDA: TORCH_UCX_HOST);
+    req->dst_buf_mtype = (output_tensor.is_cuda() ? TORCH_UCX_CUDA: TORCH_UCX_HOST);
+
+#ifdef USE_CUDA
+    if (req->src_buf_mtype == TORCH_UCX_CUDA) {
+        req->cuda_event.record(at::cuda::getCurrentCUDAStream(input_tensor.device().index()));
+    }
+#endif
+
+    if ((comm->config.chunk > group_size - 1) || (comm->config.chunk <= 0)) {
+        total_reqs = group_size - 1;
+    } else {
+        total_reqs = comm->config.chunk;
+    }
+    req->reqs = new torch_ucx_request_t*[2*total_reqs];
+    req->tag      = tag;
+    req->comm     = comm;
+    req->n_rreqs  = 0;
+    req->n_sreqs  = 0;
+    req->status   = TORCH_UCC_INPROGRESS;
+    req->progress = torch_ucx_alltoall_progress;
+
+    comm->last_tag++;
+    *request = (torch_ucc_coll_request_t*)req;
+
+    return TORCH_UCC_OK;
+}
+
 torch_ucc_status_t torch_ucx_alltoallv_progress(torch_ucx_coll_request_t *request)
 {
     torch_ucx_comm_t  *p2p_comm  = request->comm->p2p_comm;
@@ -162,7 +239,41 @@ torch_ucc_status_t torch_ucx_alltoallv_progress(torch_ucx_coll_request_t *reques
     } else {
         total_reqs = chunk;
     }
-    
+
+    if (request->n_sreqs == 0) {
+#ifdef USE_CUDA
+        if ((request->src_buf_mtype == TORCH_UCX_CUDA) && (!request->cuda_event.query())) {
+            /* input tensor is not ready */
+            return TORCH_UCC_OK;
+        }
+#endif
+        send_size  = request->send_lengths[group_rank] * send_data_size;
+        recv_size  = request->recv_lengths[group_rank] * recv_data_size;
+        send_displ = request->send_offsets[group_rank] * send_data_size;
+        recv_displ = request->recv_offsets[group_rank] * recv_data_size;
+
+        torch_ucx_memcpy((void*)(rbuf+recv_displ), request->dst_buf_mtype,
+                         (void*)(sbuf+send_displ), request->src_buf_mtype,
+                         send_size, request->comm);
+        for (int step = 0; step < total_reqs; step++) {
+            int peer = get_recv_peer(group_rank, group_size, step, reverse);
+            recv_size  = request->recv_lengths[peer] * recv_data_size;
+            recv_displ = request->recv_offsets[peer] * recv_data_size;
+            torch_ucx_recv_nb(p2p_comm, (void*)(rbuf + recv_displ), recv_size,
+                            peer, tag, &request->reqs[step],
+                            TORCH_UCX_COLL_TAG);
+
+            peer = get_send_peer(group_rank, group_size, step, reverse);
+            send_size  = request->send_lengths[peer] * send_data_size;
+            send_displ = request->send_offsets[peer] * send_data_size;
+            torch_ucx_send_nb(p2p_comm, (void*)(sbuf + send_displ), send_size,
+                            peer, tag, &request->reqs[step + total_reqs],
+                            TORCH_UCX_COLL_TAG);
+        }
+        request->n_rreqs  = total_reqs;
+        request->n_sreqs  = total_reqs;
+    }
+
     n_polls = 0;
     while ((n_polls++ < max_polls) &&
            ((request->n_sreqs != group_size - 1) || (request->n_rreqs != group_size - 1))) {
@@ -216,68 +327,6 @@ torch_ucc_status_t torch_ucx_alltoallv_progress(torch_ucx_coll_request_t *reques
     return TORCH_UCC_OK;
 }
 
-torch_ucc_status_t torch_ucx_alltoall(void *coll_comm,
-                                      at::Tensor &input_tensor,
-                                      at::Tensor &output_tensor,
-                                      torch_ucc_coll_request_t **request)
-{
-    torch_ucx_coll_comm_t  *comm = (torch_ucx_coll_comm_t*)coll_comm;
-    torch_ucx_comm_t  *p2p_comm  = comm->p2p_comm;
-    int               group_size = p2p_comm->size;
-    int               group_rank = p2p_comm->rank;
-    ptrdiff_t         sbuf       = (ptrdiff_t)input_tensor.data_ptr();
-    ptrdiff_t         rbuf       = (ptrdiff_t)output_tensor.data_ptr();
-    size_t            data_size  = input_tensor.element_size()*input_tensor.numel()/
-                                   group_size;
-    bool              reverse    = comm->config.reverse;
-    uint32_t          tag        = comm->last_tag;
-    torch_ucx_coll_request_t *req;
-    int total_reqs;
-
-    req = new torch_ucx_coll_request_t;
-    std::vector<at::Tensor> input_tensors = {input_tensor};
-    std::vector<at::Tensor> output_tensors = {output_tensor};
-    torch_ucc_coll_request_init((torch_ucc_coll_request_t*)req,
-                                 &input_tensors,
-                                 &output_tensors);
-    req->len           = data_size;
-    req->src_buffer    = (void*)sbuf;
-    req->dst_buffer    = (void*)rbuf;
-    req->src_buf_mtype = (input_tensor.is_cuda() ? TORCH_UCX_CUDA: TORCH_UCX_HOST);
-    req->dst_buf_mtype = (output_tensor.is_cuda() ? TORCH_UCX_CUDA: TORCH_UCX_HOST);
-
-    if ((comm->config.chunk > group_size - 1) || (comm->config.chunk <= 0)) {
-        total_reqs = group_size - 1;
-    } else {
-        total_reqs = comm->config.chunk;
-    }
-    req->reqs = new torch_ucx_request_t*[2*total_reqs];
-    torch_ucx_memcpy((void*)(rbuf+data_size*group_rank), req->dst_buf_mtype,
-                     (void*)(sbuf+data_size*group_rank), req->src_buf_mtype,
-                     data_size, comm);
-    for (int step = 0; step < total_reqs; step++) {
-        int peer = get_recv_peer(group_rank, group_size, step, reverse);
-        torch_ucx_recv_nb(p2p_comm, (void*)(rbuf + peer * data_size), data_size,
-                          peer, tag, &req->reqs[step],
-                          TORCH_UCX_COLL_TAG);
-        peer = get_send_peer(group_rank, group_size, step, reverse);
-        torch_ucx_send_nb(p2p_comm, (void*)(sbuf + peer * data_size), data_size,
-                          peer, tag, &req->reqs[step + total_reqs],
-                          TORCH_UCX_COLL_TAG);
-    }
-    req->tag      = tag;
-    req->comm     = comm;
-    req->n_rreqs  = total_reqs;
-    req->n_sreqs  = total_reqs;
-    req->status   = TORCH_UCC_INPROGRESS;
-    req->progress = torch_ucx_alltoall_progress;
-
-    comm->last_tag++;
-    *request = (torch_ucc_coll_request_t*)req;
-
-    return TORCH_UCC_OK;
-}
-
 torch_ucc_status_t torch_ucx_alltoallv(void *coll_comm,
                                        at::Tensor &input_tensor,
                                        uint32_t *send_lengths, uint32_t *send_offsets,
@@ -288,16 +337,10 @@ torch_ucc_status_t torch_ucx_alltoallv(void *coll_comm,
     torch_ucx_coll_comm_t  *comm = (torch_ucx_coll_comm_t*)coll_comm;
     torch_ucx_comm_t  *p2p_comm  = comm->p2p_comm;
     int               group_size = p2p_comm->size;
-    int               group_rank = p2p_comm->rank;
     ptrdiff_t         sbuf       = (ptrdiff_t)input_tensor.data_ptr();
     ptrdiff_t         rbuf       = (ptrdiff_t)output_tensor.data_ptr();
-    bool              reverse    = comm->config.reverse;
     uint32_t          tag        = comm->last_tag;
     int total_reqs;
-    int send_data_size = at::elementSize(input_tensor.scalar_type());
-    int recv_data_size = at::elementSize(output_tensor.scalar_type());
-    int send_size, recv_size;
-    int send_displ, recv_displ;
     torch_ucx_coll_request_t *req;
 
     if ((comm->config.chunk > group_size - 1) || (comm->config.chunk <= 0)) {
@@ -325,33 +368,17 @@ torch_ucc_status_t torch_ucx_alltoallv(void *coll_comm,
 
     req->reqs = new torch_ucx_request_t*[2*total_reqs];
 
-    send_size  = send_lengths[group_rank] * send_data_size;
-    recv_size  = recv_lengths[group_rank] * recv_data_size;
-    send_displ = send_offsets[group_rank] * send_data_size;
-    recv_displ = recv_offsets[group_rank] * recv_data_size;
 
-    torch_ucx_memcpy((void*)(rbuf+recv_displ), req->dst_buf_mtype,
-                     (void*)(sbuf+send_displ), req->src_buf_mtype,
-                     send_size, comm);
-    for (int step = 0; step < total_reqs; step++) {
-        int peer = get_recv_peer(group_rank, group_size, step, reverse);
-        recv_size  = recv_lengths[peer] * recv_data_size;
-        recv_displ = recv_offsets[peer] * recv_data_size;
-        torch_ucx_recv_nb(p2p_comm, (void*)(rbuf + recv_displ), recv_size,
-                          peer, tag, &req->reqs[step],
-                          TORCH_UCX_COLL_TAG);
 
-        peer = get_send_peer(group_rank, group_size, step, reverse);
-        send_size  = send_lengths[peer] * send_data_size;
-        send_displ = send_offsets[peer] * send_data_size;
-        torch_ucx_send_nb(p2p_comm, (void*)(sbuf + send_displ), send_size,
-                          peer, tag, &req->reqs[step + total_reqs],
-                          TORCH_UCX_COLL_TAG);
+#ifdef USE_CUDA
+    if (req->src_buf_mtype == TORCH_UCX_CUDA) {
+        req->cuda_event.record(at::cuda::getCurrentCUDAStream(input_tensor.device().index()));
     }
+#endif
     req->tag      = tag;
     req->comm     = comm;
-    req->n_rreqs  = total_reqs;
-    req->n_sreqs  = total_reqs;
+    req->n_rreqs  = 0;
+    req->n_sreqs  = 0;
     req->status   = TORCH_UCC_INPROGRESS;
     req->progress = torch_ucx_alltoallv_progress;
 
