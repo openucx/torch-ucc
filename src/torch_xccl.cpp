@@ -18,7 +18,9 @@ struct xccl_oob_allgather_req_t {
     int                 my_rank;
     size_t              msglen;
     int                 iter;
+    int                 num_active_reqs;
     torch_ucx_request_t *reqs[2];
+    int                 done;
 };
 
 static xccl_status_t oob_allgather_test(void *req)
@@ -29,6 +31,10 @@ static xccl_status_t oob_allgather_test(void *req)
   char *tmpsend = NULL, *tmprecv = NULL;
   size_t msglen = oob_req->msglen;
   torch_ucx_status_t st;
+
+  if (oob_req->done) {
+      return XCCL_OK;
+  }
 
   if (oob_req->range.type == XCCL_EP_RANGE_UNDEFINED) {
     size = oob_ctx->size;
@@ -50,10 +56,12 @@ static xccl_status_t oob_allgather_test(void *req)
   }
   for (; oob_req->iter < size - 1; oob_req->iter++) {
     if (oob_req->iter > 0) {
-      st = torch_ucx_req_test(oob_ctx, oob_req->reqs, 2, NULL, 1, 2);
+      st = torch_ucx_req_test(oob_ctx, oob_req->reqs, oob_req->num_active_reqs,
+                              NULL, 1, oob_req->num_active_reqs);
       if (st == TORCH_UCX_INPROGRESS) {
         return XCCL_INPROGRESS;
       }
+      oob_req->num_active_reqs = 0;
     }
     recvdatafrom = (rank - oob_req->iter - 1 + size) % size;
     senddatafrom = (rank - oob_req->iter + size) % size;
@@ -65,13 +73,16 @@ static xccl_status_t oob_allgather_test(void *req)
 
     torch_ucx_recv_nb(oob_ctx, tmprecv, msglen, recvfrom, 1,
                       &oob_req->reqs[1], TORCH_UCX_OOB_TAG);
+    oob_req->num_active_reqs += 2;
   }
 
-  st = torch_ucx_req_test(oob_ctx, oob_req->reqs, 2, NULL, 1, 2);
+  st = torch_ucx_req_test(oob_ctx, oob_req->reqs, oob_req->num_active_reqs,
+                          NULL, 1, oob_req->num_active_reqs);
   if (st == TORCH_UCX_INPROGRESS) {
     return XCCL_INPROGRESS;
   }
 
+  oob_req->done = 1;
   return XCCL_OK;
 }
 
@@ -88,13 +99,16 @@ static int oob_allgather(void *sbuf, void *rbuf, size_t msglen,
                          void *oob_coll_ctx, void **req)
 {
   xccl_oob_allgather_req_t *oob_req = new(xccl_oob_allgather_req_t);
-  oob_req->sbuf         = sbuf;
-  oob_req->rbuf         = rbuf;
-  oob_req->msglen       = msglen;
-  oob_req->range        = range;
-  oob_req->oob_coll_ctx = oob_coll_ctx;
-  oob_req->my_rank      = my_rank;
-  oob_req->iter         = 0;
+  oob_req->sbuf            = sbuf;
+  oob_req->rbuf            = rbuf;
+  oob_req->msglen          = msglen;
+  oob_req->range           = range;
+  oob_req->oob_coll_ctx    = oob_coll_ctx;
+  oob_req->my_rank         = my_rank;
+  oob_req->iter            = 0;
+  oob_req->num_active_reqs = 0;
+  oob_req->done            = 0;
+
   *req = oob_req;
 
   return oob_allgather_test(oob_req);

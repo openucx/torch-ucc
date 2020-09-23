@@ -225,6 +225,10 @@ torch_ucx_req_test(torch_ucx_comm_t *comm, torch_ucx_request_t **reqs,
     int n_polls = 0;
     int n_completed;
 
+    if (n_completions_required == 0) {
+        return TORCH_UCX_OK;
+    }
+
     while (poll_count < 0 || n_polls++ < poll_count) {
         n_completed = 0;
         for (int i = 0; i < n_reqs; i++) {
