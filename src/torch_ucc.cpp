@@ -79,19 +79,12 @@ bool ProcessGroupUCC::WorkUCX::isSuccess() const
   return true;
 }
 
-#if TORCH_VER_MAJOR == 1 && TORCH_VER_MINOR <= 6
 bool ProcessGroupUCC::WorkUCX::wait()
 {
-    return wait_impl(kUnsetTimeout);
+    return wait(kUnsetTimeout);
 }
-#else
-bool ProcessGroupUCC::WorkUCX::wait(std::chrono::milliseconds timeout)
-{
-    return wait_impl(timeout);
-}
-#endif
 
-bool ProcessGroupUCC::WorkUCX::wait_impl(std::chrono::milliseconds timeout)
+bool ProcessGroupUCC::WorkUCX::wait(std::chrono::milliseconds timeout)
 {
     torch_ucx_req_test(comm, &req, 1, NULL, -1, 1);
     return true;
@@ -126,20 +119,12 @@ bool ProcessGroupUCC::WorkColl::isSuccess() const
   return true;
 }
 
-#if TORCH_VER_MAJOR == 1 && TORCH_VER_MINOR <= 6
 bool ProcessGroupUCC::WorkColl::wait()
 {
-    return wait_impl(kUnsetTimeout);
+    return wait(kUnsetTimeout);
 }
 
-#else
 bool ProcessGroupUCC::WorkColl::wait(std::chrono::milliseconds timeout)
-{
-    return wait_impl(timeout);
-}
-#endif
-
-bool ProcessGroupUCC::WorkColl::wait_impl(std::chrono::milliseconds timeout)
 {
     while(!isCompleted()) {};
 

@@ -36,13 +36,9 @@ class ProcessGroupUCC : public ProcessGroup {
         virtual ~WorkUCX();
         bool isCompleted() override;
         bool isSuccess() const override;
-#if TORCH_VER_MAJOR == 1 && TORCH_VER_MINOR <= 6
-        bool wait() override;
-#else
-        bool wait(std::chrono::milliseconds timeout = kUnsetTimeout) override;
-#endif
+        bool wait();
+        bool wait(std::chrono::milliseconds timeout = kUnsetTimeout);
     protected:
-        bool wait_impl(std::chrono::milliseconds timeout);
         torch_ucx_request_t *req;
         torch_ucx_comm_t    *comm;
         friend class ProcessGroupUCC;
@@ -59,14 +55,9 @@ class ProcessGroupUCC : public ProcessGroup {
         virtual ~WorkColl();
         bool isCompleted() override;
         bool isSuccess() const override;
-#if TORCH_VER_MAJOR == 1 && TORCH_VER_MINOR <= 6
-        bool wait() override;
-#else
-        bool wait(std::chrono::milliseconds timeout = kUnsetTimeout) override;
-#endif
+        bool wait();
+        bool wait(std::chrono::milliseconds timeout = kUnsetTimeout);
     protected:
-        bool wait_impl(std::chrono::milliseconds timeout);
-        
         torch_ucc_coll_ops_t     coll_ops;
         std::vector<at::Tensor>  src;
         std::vector<at::Tensor>  dst;

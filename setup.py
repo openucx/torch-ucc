@@ -6,12 +6,6 @@ import os
 import sys
 from setuptools import setup
 from torch.utils import cpp_extension
-from torch import __version__ as torch_version
-
-ver_major, ver_minor = torch_version.split(".")[:2]
-ver_major = '-DTORCH_VER_MAJOR='+ver_major
-ver_minor = '-DTORCH_VER_MINOR=6'
-#ver_minor = '-DTORCH_VER_MINOR='+ver_minor
 
 ucc_plugin_dir = os.path.dirname(os.path.abspath(__file__))
 ucx_home = os.environ.get("UCX_HOME")
@@ -29,7 +23,7 @@ plugin_include_dirs = ["{}/include/".format(ucc_plugin_dir),
                        "{}/include/".format(ucx_home)]
 plugin_library_dirs = ["{}/lib/".format(ucx_home)]
 plugin_libraries    = ["ucp", "uct", "ucm", "ucs"]
-plugin_compile_args = ['-g', '-O0', ver_major, ver_minor]
+plugin_compile_args = ['-g', '-O0']
 
 with_xccl = os.environ.get("WITH_XCCL")
 if with_xccl is None or with_xccl == "no":
