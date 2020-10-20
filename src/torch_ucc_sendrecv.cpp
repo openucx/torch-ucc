@@ -53,7 +53,7 @@ torch_ucx_status_t torch_ucx_comm_init(torch_ucx_comm_t **ucx_comm,
     params.estimated_num_eps = size;
     params.request_init      = torch_ucx_req_init;
     params.request_cleanup   = torch_ucx_req_cleanup;
-    params.tag_sender_mask   = TORCH_UCX_RANK_MASK; 
+    params.tag_sender_mask   = TORCH_UCX_RANK_MASK;
     st = ucp_init(&params, config, &comm->ctx);
     ucp_config_release(config);
     if (st != UCS_OK) {

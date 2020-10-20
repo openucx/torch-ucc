@@ -28,12 +28,10 @@ struct torch_ucx_coll_config_t {
 };
 
 struct torch_ucx_coll_comm_t {
+    torch_ucc_coll_comm_t   super;
     torch_ucx_comm_t        *p2p_comm;
     torch_ucx_coll_config_t config;
     uint32_t                last_tag;
-#ifdef USE_CUDA
-    cudaStream_t            stream;
-#endif 
 };
 
 struct torch_ucx_coll_request_t {
@@ -57,16 +55,17 @@ struct torch_ucx_coll_request_t {
     int                      n_sreqs;
     int                      n_rreqs;
 #ifdef USE_CUDA
-    at::cuda::CUDAEvent      cuda_event;
+    at::cuda::CUDAEvent      memcpy_done;
 #endif
+
 };
 
-torch_ucc_status_t torch_ucx_alltoall(void *coll_comm,
+torch_ucc_status_t torch_ucx_alltoall(torch_ucc_coll_comm_t *coll_comm,
                                       at::Tensor &input_tensor,
                                       at::Tensor &output_tensor,
                                       torch_ucc_coll_request_t **request);
 
-torch_ucc_status_t torch_ucx_alltoallv(void *coll_comm,
+torch_ucc_status_t torch_ucx_alltoallv(torch_ucc_coll_comm_t *coll_comm,
                                        at::Tensor &input_tensor,
                                        uint32_t *send_lengths, uint32_t *send_offsets,
                                        at::Tensor &output_tensor,

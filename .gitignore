@@ -55,3 +55,8 @@ dkms.conf
 *.egg-info
 build/
 dist/
+*.pyc
+
+# vscode
+*.code-workspace
+.vscode

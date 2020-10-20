@@ -144,7 +144,7 @@ class ProcessGroupUCC : public ProcessGroup {
 protected:
     std::shared_ptr<Store>                store_;
     torch_ucx_comm_t                      *ucx_comm;
-    void                                  *coll_comm;
+    torch_ucc_coll_comm_t                 *coll_comm;
     torch_ucc_coll_ops_t                  coll_ops;
     std::mutex                            pg_mutex;
     std::thread                           progress_thread;

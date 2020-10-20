@@ -6,7 +6,7 @@ import numpy as np
 from torch_ucc_test_setup import *
 
 args = parse_test_args()
-pg = init_process_groups(args.backend)
+pg = init_process_groups(args.backend, args.use_cuda)
 
 comm_size = dist.get_world_size()
 comm_rank = dist.get_rank()

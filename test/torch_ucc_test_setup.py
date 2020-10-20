@@ -28,7 +28,7 @@ def get_tensor(count, is_cuda):
     t = torch.randint(0, 100, (count,), dtype=torch.int, device=dev)
     return t
 
-def init_process_groups(bend):
+def init_process_groups(bend, use_cuda):
     try:
         comm_size = int(os.environ['OMPI_COMM_WORLD_SIZE'])
         comm_rank = int(os.environ['OMPI_COMM_WORLD_RANK'])
@@ -37,7 +37,7 @@ def init_process_groups(bend):
         print('OMPI env variables are not found')
         sys.exit(1)
 
-    if torch.cuda.is_available():
+    if use_cuda:
         torch.cuda.set_device(local_rank)
 
     os.environ['MASTER_PORT'] = '32167'
@@ -51,16 +51,16 @@ def init_process_groups(bend):
 
 def check_tensor_equal(t1, t2):
     if torch.all(torch.eq(t1, t2)):
-        return torch.tensor(1)
+        return torch.tensor(1, device=t1.device)
     else:
-        return torch.tensor(0)
+        return torch.tensor(0, device=t1.device)
 
 def check_tensor_list_equal(t1, t2):
     num_tensors = len(t1)
     for i in range(num_tensors):
         if not torch.all(torch.eq(t1[i], t2[i])):
-            return torch.tensor(0)
-    return torch.tensor(1)
+            return torch.tensor(0, device=t1[i].device)
+    return torch.tensor(1, device=t1[i].device)
 
 def print_test_head(test_name, comm_rank):
     if comm_rank == 0:
@@ -69,7 +69,7 @@ def print_test_head(test_name, comm_rank):
 
 def print_test_result(status, count, comm_rank, comm_size):
     if comm_rank == 0:
-        result = "OK" if status == comm_size else "Failed" 
+        result = "OK" if status == comm_size else "Failed"
         print("{0:20} {1}".format(str(count), result))
     if status != comm_size:
         sys.exit(1)

@@ -17,7 +17,7 @@ static void torch_ucx_get_coll_config(torch_ucx_coll_config_t *config)
     config->chunk     = 1;
     config->reverse   = 0;
     config->max_polls = 10;
- 
+
     env = std::getenv("TORCH_UCC_UCX_CHUNK");
     if (env) {
         config->chunk = std::atoi(env);
@@ -33,7 +33,7 @@ static void torch_ucx_get_coll_config(torch_ucx_coll_config_t *config)
 }
 
 torch_ucc_status_t torch_ucx_coll_comm_init(torch_ucx_comm_t *p2p_comm,
-                                            void **comm)
+                                            torch_ucc_coll_comm_t **comm)
 {
     torch_ucx_coll_comm_t *coll_comm;
 
@@ -41,10 +41,7 @@ torch_ucc_status_t torch_ucx_coll_comm_init(torch_ucx_comm_t *p2p_comm,
     torch_ucx_get_coll_config(&coll_comm->config);
     coll_comm->p2p_comm = p2p_comm;
     coll_comm->last_tag = 0;
-#ifdef USE_CUDA
-    coll_comm->stream   = 0;
-#endif
-    *comm = coll_comm;
+    *comm = (torch_ucc_coll_comm_t*)coll_comm;
     return TORCH_UCC_OK;
 }
 
@@ -55,16 +52,11 @@ torch_ucc_status_t torch_ucx_coll_test(torch_ucc_coll_request_t *request)
     return req->status;
 }
 
-torch_ucc_status_t torch_ucx_coll_comm_close(void *comm)
+torch_ucc_status_t torch_ucx_coll_comm_close(torch_ucc_coll_comm_t *comm)
 {
     torch_ucx_coll_comm_t *coll_comm;
 
-    coll_comm = (torch_ucx_coll_comm_t*)(comm);
-#ifdef USE_CUDA
-    if (coll_comm->stream != 0) {
-        cudaStreamDestroy(coll_comm->stream);
-    }
-#endif
+    coll_comm = (torch_ucx_coll_comm_t*)comm;
     delete coll_comm;
 
     return TORCH_UCC_OK;
@@ -85,7 +77,7 @@ torch_ucc_status_t torch_ucx_coll_free(torch_ucc_coll_request_t *request)
     return TORCH_UCC_OK;
 }
 
-torch_ucc_status_t torch_ucx_coll_allreduce(void *coll_comm,
+torch_ucc_status_t torch_ucx_coll_allreduce(torch_ucc_coll_comm_t *coll_comm,
                                             at::Tensor &tensor,
                                             const AllreduceOptions& opts,
                                             torch_ucc_coll_request_t **request)
@@ -94,14 +86,14 @@ torch_ucc_status_t torch_ucx_coll_allreduce(void *coll_comm,
     return TORCH_UCC_ERROR;
 }
 
-torch_ucc_status_t torch_ucx_coll_barrier(void *coll_comm,
+torch_ucc_status_t torch_ucx_coll_barrier(torch_ucc_coll_comm_t *coll_comm,
                                           torch_ucc_coll_request_t **request)
 {
     fprintf(stderr, "ProcessGroupUCC: UCX backend doesn't support barrier\n");
     return TORCH_UCC_ERROR;
 }
 
-torch_ucc_status_t torch_ucx_coll_allgather(void *coll_comm,
+torch_ucc_status_t torch_ucx_coll_allgather(torch_ucc_coll_comm_t *coll_comm,
                                             at::Tensor &input_tensor,
                                             std::vector<at::Tensor>& output_tensors,
                                             torch_ucc_coll_request_t **request)
@@ -110,14 +102,14 @@ torch_ucc_status_t torch_ucx_coll_allgather(void *coll_comm,
     return TORCH_UCC_ERROR;
 }
 
-torch_ucc_status_t torch_ucx_coll_broadcast(void *coll_comm, at::Tensor &tensor,
+torch_ucc_status_t torch_ucx_coll_broadcast(torch_ucc_coll_comm_t *coll_comm,
+                                            at::Tensor &tensor,
                                             int root,
                                             torch_ucc_coll_request_t **request)
 {
     fprintf(stderr, "ProcessGroupUCC: UCX backend doesn't support broadcast\n");
     return TORCH_UCC_ERROR;
 }
-
 
 torch_ucc_coll_ops_t ucx_coll_ops {
     torch_ucx_coll_comm_init,

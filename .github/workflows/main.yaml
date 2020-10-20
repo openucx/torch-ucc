@@ -33,7 +33,7 @@ jobs:
         ./configure --with-ucx=/opt/ucx --prefix=/opt/xccl
         make -j install
     - uses: actions/checkout@v1
-    - name: Build with UCX 
+    - name: Build with UCX
       run: |
         UCX_HOME=/opt/ucx/ WITH_CUDA=no WITH_XCCL=no python setup.py install
         UCX_HOME=/opt/ucx/install python setup.py clean --all
@@ -48,12 +48,8 @@ jobs:
         TORCH_UCC_COLL_BACKEND=xccl /bin/bash ./test/start_test.sh ./test/torch_allreduce_test.py --backend=gloo
         echo "XCCL alltoall"
         TORCH_UCC_COLL_BACKEND=xccl /bin/bash ./test/start_test.sh ./test/torch_alltoall_test.py --backend=gloo
-        echo "UCX alltoall"
-        TORCH_UCC_COLL_BACKEND=ucx /bin/bash ./test/start_test.sh ./test/torch_alltoall_test.py --backend=gloo
         echo "XCCL alltoallv"
         TORCH_UCC_COLL_BACKEND=xccl /bin/bash ./test/start_test.sh ./test/torch_alltoallv_test.py --backend=gloo
-        echo "UCX alltoallv"
-        TORCH_UCC_COLL_BACKEND=ucx /bin/bash ./test/start_test.sh ./test/torch_alltoallv_test.py --backend=gloo
         echo "XCCL barrier"
         TORCH_UCC_COLL_BACKEND=xccl /bin/bash ./test/start_test.sh ./test/torch_barrier_test.py --backend=gloo
         echo "XCCL allgather"

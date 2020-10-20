@@ -135,7 +135,7 @@ void ProcessGroupUCC::read_config()
 {
     char *env;
 
-    config.enable_progress_thread = true; 
+    config.enable_progress_thread = true;
     env = std::getenv("TORCH_UCC_THREAD_ENABLE");
     if (env) {
         config.enable_progress_thread = std::atoi(env);
@@ -176,7 +176,7 @@ void ProcessGroupUCC::progress_loop()
     std::unique_lock<std::mutex> lock(pg_mutex);
     torch_ucc_status_t           st;
     torch_ucc_coll_request_t     *req;
- 
+
  #ifdef USE_CUDA
     auto device = c10::Device(c10::DeviceType::CUDA, (c10::DeviceIndex)0);
     at::cuda::OptionalCUDAGuard  guard(device);
@@ -425,7 +425,7 @@ std::shared_ptr<ProcessGroup::Work> ProcessGroupUCC::send(std::vector<at::Tensor
     if (st < 0) {
        throw std::runtime_error("ProcessGroupUCC: failed to send msg");
     }
-  
+
     return std::make_shared<ProcessGroupUCC::WorkUCX>(req, ucx_comm);
 }
 
