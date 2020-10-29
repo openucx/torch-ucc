@@ -9,10 +9,10 @@
 namespace c10d {
 
 enum torch_ucc_status_t {
-    TORCH_UCC_OK                    =  0,
-    TORCH_UCC_INPROGRESS            =  1,
-    TORCH_UCC_OPERATION_INITIALIZED =  2,
-    TORCH_UCC_ERROR                 = -1,
+  TORCH_UCC_OK = 0,
+  TORCH_UCC_INPROGRESS = 1,
+  TORCH_UCC_OPERATION_INITIALIZED = 2,
+  TORCH_UCC_ERROR = -1,
 };
 
 };
