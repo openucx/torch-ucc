@@ -37,7 +37,10 @@ torch_ucx_status_t torch_ucx_comm_init(
 
   st = ucp_config_read("TORCH", NULL, &config);
   if (st != UCS_OK) {
-    fprintf(stderr, "TorchUCC: failed to read ucp config\n");
+    fprintf(
+        stderr,
+        "TorchUCC: failed to read ucp config %s\n",
+        ucs_status_string(st));
     goto free_comm;
   }
 
@@ -54,7 +57,10 @@ torch_ucx_status_t torch_ucx_comm_init(
   st = ucp_init(&params, config, &comm->ctx);
   ucp_config_release(config);
   if (st != UCS_OK) {
-    fprintf(stderr, "TorchUCC: failed to init ucp context\n");
+    fprintf(
+        stderr,
+        "TorchUCC: failed to init ucp context %s\n",
+        ucs_status_string(st));
     goto free_comm;
   }
 
@@ -63,19 +69,28 @@ torch_ucx_status_t torch_ucx_comm_init(
   worker_params.thread_mode = UCS_THREAD_MODE_MULTI;
   st = ucp_worker_create(comm->ctx, &worker_params, &comm->worker);
   if (st != UCS_OK) {
-    fprintf(stderr, "TorchUCC: failed to init ucp worker\n");
+    fprintf(
+        stderr,
+        "TorchUCC: failed to init ucp worker %s\n",
+        ucs_status_string(st));
     goto close_ctx;
   }
 
   worker_attr.field_mask = UCP_WORKER_ATTR_FIELD_THREAD_MODE;
   ucp_worker_query(comm->worker, &worker_attr);
   if (worker_attr.thread_mode != UCS_THREAD_MODE_MULTI) {
-    fprintf(stderr, "TorchUCC: Thread mode multi is not supported\n");
+    fprintf(
+        stderr,
+        "TorchUCC: Thread mode multi is not supported %s\n",
+        ucs_status_string(st));
   }
 
   st = ucp_worker_get_address(comm->worker, &local_addr, &local_addr_len);
   if (st != UCS_OK) {
-    fprintf(stderr, "TorchUCC: failed to get ucp worker address\n");
+    fprintf(
+        stderr,
+        "TorchUCC: failed to get ucp worker address %s\n",
+        ucs_status_string(st));
     goto close_worker;
   }
 
@@ -94,7 +109,10 @@ torch_ucx_status_t torch_ucx_comm_init(
     ep_params.address = reinterpret_cast<ucp_address_t*>(peer_addr.data());
     st = ucp_ep_create(comm->worker, &ep_params, &(comm->eps[i]));
     if (st != UCS_OK) {
-      fprintf(stderr, "TorchUCC: failed to create ucp ep\n");
+      fprintf(
+          stderr,
+          "TorchUCC: failed to create ucp ep %s\n",
+          ucs_status_string(st));
       goto close_ep;
     }
   }
