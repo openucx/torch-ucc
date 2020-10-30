@@ -46,7 +46,7 @@ static inline void torch_ucx_memcpy(
   }
 
 #ifdef USE_CUDA
-  cudaMemcpyKind mk;
+  cudaMemcpyKind mk = cudaMemcpyDefault;
 
   if ((src_mtype == TORCH_UCX_CUDA) && (dst_mtype == TORCH_UCX_CUDA)) {
     mk = cudaMemcpyDeviceToDevice;
