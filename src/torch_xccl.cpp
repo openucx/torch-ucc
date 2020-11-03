@@ -249,6 +249,9 @@ torch_ucc_status_t torch_xccl_comm_init(
   }
   while (XCCL_INPROGRESS == xccl_team_create_test(xccl_comm->xccl_team))
     ;
+#ifdef USE_CUDA
+  xccl_comm->super.stream = nullptr;
+#endif
   *comm = (torch_ucc_coll_comm_t*)xccl_comm;
 
   return TORCH_UCC_OK;

@@ -174,6 +174,7 @@ class ProcessGroupUCC : public ProcessGroup {
 
   void progress_loop();
   void enqueue_request(torch_ucc_coll_request_t* req);
+  torch_ucc_coll_comm_t* get_coll_comm();
 
  private:
   struct ucc_config {

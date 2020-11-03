@@ -105,7 +105,7 @@ inline void torch_ucc_coll_request_init(
       c10::DeviceIndex dev_index = request->src[0].device().index();
 
       request->tensor_ready.record(at::cuda::getCurrentCUDAStream(dev_index));
-      if (coll_comm->stream == NULL) {
+      if (coll_comm->stream == nullptr) {
         coll_comm->stream = std::make_unique<at::cuda::CUDAStream>(
             at::cuda::getStreamFromPool(dev_index));
       }

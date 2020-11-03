@@ -151,15 +151,25 @@ ProcessGroupUCC::ProcessGroupUCC(
   if (st_ucc != TORCH_UCC_OK) {
     throw std::runtime_error("ProcessGroupUCC failed to init collops");
   }
-
-  st_ucc = coll_ops.coll_comm_init(ucx_comm, &coll_comm);
-  if (st_ucc != TORCH_UCC_OK) {
-    throw std::runtime_error("ProcessGroupUCC failed to init collective comm");
-  }
+  coll_comm = NULL;
 
   if (config.enable_progress_thread) {
     progress_thread = std::thread(&ProcessGroupUCC::progress_loop, this);
   }
+}
+
+torch_ucc_coll_comm_t* ProcessGroupUCC::get_coll_comm() {
+  if (coll_comm == NULL) {
+    torch_ucc_status_t st_ucc;
+
+    st_ucc = coll_ops.coll_comm_init(ucx_comm, &coll_comm);
+    if (st_ucc != TORCH_UCC_OK) {
+      throw std::runtime_error(
+          "ProcessGroupUCC failed to init collective comm");
+    }
+  }
+
+  return coll_comm;
 }
 
 void ProcessGroupUCC::progress_loop() {
@@ -224,10 +234,12 @@ std::shared_ptr<ProcessGroup::Work> ProcessGroupUCC::broadcast(
     const BroadcastOptions& opts) {
   auto request = std::make_shared<ProcessGroupUCC::WorkColl>(coll_ops);
   auto& tensor = tensors[0];
+  torch_ucc_coll_comm_t* ucc_comm;
   torch_ucc_coll_request_t* coll_req;
   torch_ucc_status_t st;
 
-  st = coll_ops.broadcast(coll_comm, tensor, opts.rootRank, &coll_req);
+  ucc_comm = get_coll_comm();
+  st = coll_ops.broadcast(ucc_comm, tensor, opts.rootRank, &coll_req);
   if (st != TORCH_UCC_OK) {
     throw std::runtime_error("ProcessGroupUCC: broadcast failed");
   }
@@ -247,10 +259,12 @@ std::shared_ptr<ProcessGroup::Work> ProcessGroupUCC::allreduce(
     const AllreduceOptions& opts) {
   auto request = std::make_shared<ProcessGroupUCC::WorkColl>(coll_ops);
   auto& tensor = tensors[0];
+  torch_ucc_coll_comm_t* ucc_comm;
   torch_ucc_coll_request_t* coll_req;
   torch_ucc_status_t st;
 
-  st = coll_ops.allreduce(coll_comm, tensor, opts, &coll_req);
+  ucc_comm = get_coll_comm();
+  st = coll_ops.allreduce(ucc_comm, tensor, opts, &coll_req);
   if (st != TORCH_UCC_OK) {
     throw std::runtime_error("ProcessGroupUCC: allreduce failed");
   }
@@ -283,11 +297,13 @@ std::shared_ptr<ProcessGroup::Work> ProcessGroupUCC::allgather(
     std::vector<at::Tensor>& inputTensors,
     const AllgatherOptions& opts) {
   auto request = std::make_shared<ProcessGroupUCC::WorkColl>(coll_ops);
+  torch_ucc_coll_comm_t* ucc_comm;
   torch_ucc_coll_request_t* coll_req;
   torch_ucc_status_t st;
 
+  ucc_comm = get_coll_comm();
   st = coll_ops.allgather(
-      coll_comm, inputTensors[0], outputTensors[0], &coll_req);
+      ucc_comm, inputTensors[0], outputTensors[0], &coll_req);
   if (st != TORCH_UCC_OK) {
     throw std::runtime_error("ProcessGroupUCC: allgather failed");
   }
@@ -309,10 +325,12 @@ std::shared_ptr<ProcessGroup::Work> ProcessGroupUCC::allgather_base(
 std::shared_ptr<ProcessGroup::Work> ProcessGroupUCC::barrier(
     const BarrierOptions& opts) {
   auto request = std::make_shared<ProcessGroupUCC::WorkColl>(coll_ops);
+  torch_ucc_coll_comm_t* ucc_comm;
   torch_ucc_coll_request_t* coll_req;
   torch_ucc_status_t st;
 
-  st = coll_ops.barrier(coll_comm, &coll_req);
+  ucc_comm = get_coll_comm();
+  st = coll_ops.barrier(ucc_comm, &coll_req);
   if (st != TORCH_UCC_OK) {
     throw std::runtime_error("ProcessGroupUCC: barrier failed");
   }
@@ -352,11 +370,13 @@ std::shared_ptr<ProcessGroup::Work> ProcessGroupUCC::alltoall_base(
     std::vector<int64_t>& inputSplitSizes,
     const AllToAllOptions& opts) {
   auto request = std::make_shared<ProcessGroupUCC::WorkColl>(coll_ops);
+  torch_ucc_coll_comm_t* ucc_comm;
   torch_ucc_coll_request_t* coll_req;
   torch_ucc_status_t st;
 
+  ucc_comm = get_coll_comm();
   if ((outputSplitSizes.size() == 0) && (inputSplitSizes.size() == 0)) {
-    st = coll_ops.alltoall(coll_comm, inputTensor, outputTensor, &coll_req);
+    st = coll_ops.alltoall(ucc_comm, inputTensor, outputTensor, &coll_req);
     if (st != TORCH_UCC_OK) {
       throw std::runtime_error("ProcessGroupUCC: alltoall_base failed");
     }
@@ -383,7 +403,7 @@ std::shared_ptr<ProcessGroup::Work> ProcessGroupUCC::alltoall_base(
     }
 
     coll_ops.alltoallv(
-        coll_comm,
+        ucc_comm,
         inputTensor,
         send_lengths,
         send_offsets,

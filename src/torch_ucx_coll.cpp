@@ -40,6 +40,10 @@ torch_ucc_status_t torch_ucx_coll_comm_init(
   torch_ucx_get_coll_config(&coll_comm->config);
   coll_comm->p2p_comm = p2p_comm;
   coll_comm->last_tag = 0;
+#ifdef USE_CUDA
+  coll_comm->super.stream = nullptr;
+#endif
+
   *comm = (torch_ucc_coll_comm_t*)coll_comm;
   return TORCH_UCC_OK;
 }
