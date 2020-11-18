@@ -4,8 +4,8 @@
  * * See file LICENSE for terms.
  * */
 
-#include <torch_ucc.hpp>
 #include <stdio.h>
+#include <torch_ucc.hpp>
 #include <torch_ucc_sendrecv.hpp>
 
 #ifdef USE_CUDA
