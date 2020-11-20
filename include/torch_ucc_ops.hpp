@@ -98,6 +98,7 @@ inline void torch_ucc_coll_request_init(
     torch_ucc_coll_request_t* request,
     std::vector<at::Tensor>* srcPtr,
     std::vector<at::Tensor>* dstPtr) {
+  request->dev_type = c10::DeviceType::CPU;
   if (srcPtr) {
     request->src = *srcPtr;
     request->dev_index = request->src[0].device().index();

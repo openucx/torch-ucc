@@ -40,6 +40,8 @@ jobs:
       run: |
         export LD_LIBRARY_PATH=/opt/ucx/lib:/opt/xccl/lib:$LD_LIBRARY_PATH
         export TORCH_UCC_XCCL_TLS=ucx
+        /opt/ucx/bin/ucx_info -e -u t
+        export UCX_LOG_LEVEL=info
         echo "XCCL allreduce"
         /bin/bash ./test/start_test.sh ./test/torch_allreduce_test.py --backend=gloo
         echo "XCCL alltoall"
