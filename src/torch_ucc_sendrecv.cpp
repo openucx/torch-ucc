@@ -168,7 +168,10 @@ void torch_ucx_comm_close(
   delete comm;
 }
 
-void torch_ucx_send_cmpl_cb(void* request, ucs_status_t status) {
+void torch_ucx_send_cmpl_cb(
+    void* request,
+    ucs_status_t status,
+    void* user_data) {
   torch_ucx_request_t* req = static_cast<torch_ucx_request_t*>(request);
   req->status = TORCH_UCX_REQUEST_DONE;
 }
@@ -176,7 +179,8 @@ void torch_ucx_send_cmpl_cb(void* request, ucs_status_t status) {
 void torch_ucx_recv_cmpl_cb(
     void* request,
     ucs_status_t status,
-    ucp_tag_recv_info_t* info) {
+    const ucp_tag_recv_info_t* info,
+    void* user_data) {
   torch_ucx_request_t* req = static_cast<torch_ucx_request_t*>(request);
   req->status = TORCH_UCX_REQUEST_DONE;
 }

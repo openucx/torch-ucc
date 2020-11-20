@@ -86,6 +86,7 @@ static xccl_status_t oob_allgather_test(void* req) {
     torch_ucx_send_nb(
         oob_ctx,
         tmpsend,
+        UCS_MEMORY_TYPE_HOST,
         msglen,
         sendto,
         1,
@@ -95,6 +96,7 @@ static xccl_status_t oob_allgather_test(void* req) {
     torch_ucx_recv_nb(
         oob_ctx,
         tmprecv,
+        UCS_MEMORY_TYPE_HOST,
         msglen,
         recvfrom,
         1,

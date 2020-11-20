@@ -9,14 +9,18 @@
 #include <c10d/ProcessGroup.hpp>
 #include <c10d/Types.hpp>
 #include <torch_ucc_sendrecv.hpp>
-#include <torch_ucc_status.hpp>
 #ifdef USE_CUDA
 #include <ATen/cuda/CUDAEvent.h>
 #include <c10/cuda/CUDAStream.h>
 #endif
 namespace c10d {
 
-enum torch_ucx_memtype_t { TORCH_UCX_HOST, TORCH_UCX_CUDA };
+enum torch_ucc_status_t {
+  TORCH_UCC_OK = 0,
+  TORCH_UCC_INPROGRESS = 1,
+  TORCH_UCC_OPERATION_INITIALIZED = 2,
+  TORCH_UCC_ERROR = -1,
+};
 
 struct torch_ucc_coll_comm_t {
 #ifdef USE_CUDA
@@ -87,11 +91,7 @@ struct torch_ucc_coll_ops_t {
   torch_ucc_status_t (*coll_comm_close)(torch_ucc_coll_comm_t* coll_comm);
 };
 
-extern torch_ucc_coll_ops_t ucx_coll_ops;
-
-#ifdef WITH_XCCL
 extern torch_ucc_coll_ops_t xccl_coll_ops;
-#endif
 
 inline void torch_ucc_coll_request_init(
     torch_ucc_coll_comm_t* coll_comm,
@@ -125,21 +125,7 @@ inline void torch_ucc_coll_request_init(
 
 inline torch_ucc_status_t torch_ucc_coll_ops_init(
     torch_ucc_coll_ops_t* coll_ops) {
-  char* env;
-
-  env = std::getenv("TORCH_UCC_COLL_BACKEND");
-  if ((env != NULL) && (!strcasecmp(env, "xccl"))) {
-#ifdef WITH_XCCL
-    *coll_ops = xccl_coll_ops;
-#else
-    fprintf(
-        stderr, "ProcessGroupUCC: plugin wasn't compiled with XCCL support\n");
-    return TORCH_UCC_ERROR;
-#endif
-  } else {
-    *coll_ops = ucx_coll_ops;
-  }
-
+  *coll_ops = xccl_coll_ops;
   return TORCH_UCC_OK;
 }
 

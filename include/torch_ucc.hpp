@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include <torch/extension.h>
+#include <torch/python.h>
 
 #include <deque>
 #include <exception>
@@ -36,8 +36,7 @@ class ProcessGroupUCC : public ProcessGroup {
     virtual ~WorkUCX();
     bool isCompleted() override;
     bool isSuccess() const override;
-    bool wait();
-    bool wait(std::chrono::milliseconds timeout = kUnsetTimeout);
+    bool wait(std::chrono::milliseconds timeout = kUnsetTimeout) override;
 
    protected:
     torch_ucx_request_t* req;
@@ -58,8 +57,7 @@ class ProcessGroupUCC : public ProcessGroup {
     virtual ~WorkColl();
     bool isCompleted() override;
     bool isSuccess() const override;
-    bool wait();
-    bool wait(std::chrono::milliseconds timeout = kUnsetTimeout);
+    bool wait(std::chrono::milliseconds timeout = kUnsetTimeout) override;
 
    protected:
     torch_ucc_coll_ops_t coll_ops;

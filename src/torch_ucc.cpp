@@ -5,13 +5,12 @@
  * */
 
 #include <torch_ucc.hpp>
-#include <stdio.h>
 #include <torch_ucc_sendrecv.hpp>
-
 #ifdef USE_CUDA
 #include <c10/cuda/CUDAGuard.h>
 #include <cuda.h>
 #endif
+#include <stdio.h>
 
 namespace c10d {
 
@@ -77,10 +76,6 @@ bool ProcessGroupUCC::WorkUCX::isSuccess() const {
   return true;
 }
 
-bool ProcessGroupUCC::WorkUCX::wait() {
-  return wait(kUnsetTimeout);
-}
-
 bool ProcessGroupUCC::WorkUCX::wait(std::chrono::milliseconds timeout) {
   torch_ucx_req_test(comm, &req, 1, NULL, -1, 1);
   return true;
@@ -120,10 +115,6 @@ bool ProcessGroupUCC::WorkColl::isCompleted() {
 bool ProcessGroupUCC::WorkColl::isSuccess() const {
   // TODO
   return true;
-}
-
-bool ProcessGroupUCC::WorkColl::wait() {
-  return wait(kUnsetTimeout);
 }
 
 bool ProcessGroupUCC::WorkColl::wait(std::chrono::milliseconds timeout) {
@@ -413,14 +404,21 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::send(
     std::vector<at::Tensor>& tensors,
     int dstRank,
     int tag) {
-  // TODO: check tensor count and type, assume single dense tensor
+  check_tensor(tensors);
   auto& tensor = tensors[0];
   size_t size = tensor.numel() * tensor.element_size();
   torch_ucx_request_t* req;
   torch_ucx_status_t st;
 
   st = torch_ucx_send_nb(
-      ucx_comm, tensor.data_ptr(), size, dstRank, tag, &req, TORCH_UCX_P2P_TAG);
+      ucx_comm,
+      tensor.data_ptr(),
+      ucs_mtype_map.at(tensor.device().type()),
+      size,
+      dstRank,
+      tag,
+      &req,
+      TORCH_UCX_P2P_TAG);
   if (st < 0) {
     throw std::runtime_error("ProcessGroupUCC: failed to send msg");
   }
@@ -432,13 +430,21 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::recv(
     std::vector<at::Tensor>& tensors,
     int srcRank,
     int tag) {
+  check_tensor(tensors);
   auto& tensor = tensors[0];
   size_t size = tensor.numel() * tensor.element_size();
   torch_ucx_request_t* req;
   torch_ucx_status_t st;
 
   st = torch_ucx_recv_nb(
-      ucx_comm, tensor.data_ptr(), size, srcRank, tag, &req, TORCH_UCX_P2P_TAG);
+      ucx_comm,
+      tensor.data_ptr(),
+      ucs_mtype_map.at(tensor.device().type()),
+      size,
+      srcRank,
+      tag,
+      &req,
+      TORCH_UCX_P2P_TAG);
   if (st < 0) {
     throw std::runtime_error("ProcessGroupUCC: failed to recv msg");
   }
@@ -449,7 +455,26 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::recv(
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::recvAnysource(
     std::vector<at::Tensor>& tensors,
     int tag) {
-  throw std::runtime_error("ProcessGroupUCC: recvAnysource is not supported");
+  check_tensor(tensors);
+  auto& tensor = tensors[0];
+  size_t size = tensor.numel() * tensor.element_size();
+  torch_ucx_request_t* req;
+  torch_ucx_status_t st;
+
+  st = torch_ucx_recv_nb(
+      ucx_comm,
+      tensor.data_ptr(),
+      ucs_mtype_map.at(tensor.device().type()),
+      size,
+      TORCH_UCX_ANY_SOURCE,
+      tag,
+      &req,
+      TORCH_UCX_P2P_TAG);
+  if (st < 0) {
+    throw std::runtime_error("ProcessGroupUCC: failed to recv msg");
+  }
+
+  return c10::make_intrusive<ProcessGroupUCC::WorkUCX>(req, ucx_comm);
 }
 
 c10::intrusive_ptr<ProcessGroup> ProcessGroupUCC::createProcessGroupUCC(
