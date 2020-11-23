@@ -35,7 +35,7 @@ torch_ucx_status_t torch_ucx_comm_init(
   comm->rank = rank;
   comm->size = size;
 
-  st = ucp_config_read("TORCH", NULL, &config);
+  st = ucp_config_read("TORCH", nullptr, &config);
   if (st != UCS_OK) {
     fprintf(
         stderr,
@@ -125,7 +125,7 @@ close_ctx:
   ucp_cleanup(comm->ctx);
 free_comm:
   delete comm;
-  *ucx_comm = NULL;
+  *ucx_comm = nullptr;
   return TORCH_UCX_ERROR;
 }
 

@@ -6,11 +6,12 @@
 
 #include <torch_ucc.hpp>
 #include <torch_ucc_sendrecv.hpp>
+#include <utility>
 #ifdef USE_CUDA
 #include <c10/cuda/CUDAGuard.h>
 #include <cuda.h>
 #endif
-#include <stdio.h>
+#include <cstdio>
 
 namespace c10d {
 
@@ -59,7 +60,7 @@ static torch_ucc_status_t compute_lengths_offsets(
 }
 
 ProcessGroupUCC::WorkUCX::~WorkUCX() {
-  if (req != NULL) {
+  if (req != nullptr) {
     torch_ucx_request_free(req);
   }
 }
@@ -67,7 +68,7 @@ ProcessGroupUCC::WorkUCX::~WorkUCX() {
 bool ProcessGroupUCC::WorkUCX::isCompleted() {
   torch_ucx_status_t st;
 
-  st = torch_ucx_req_test(comm, &req, 1, NULL, 1, 1);
+  st = torch_ucx_req_test(comm, &req, 1, nullptr, 1, 1);
   return (st != TORCH_UCX_INPROGRESS);
 }
 
@@ -76,13 +77,14 @@ bool ProcessGroupUCC::WorkUCX::isSuccess() const {
   return true;
 }
 
-bool ProcessGroupUCC::WorkUCX::wait(std::chrono::milliseconds timeout) {
-  torch_ucx_req_test(comm, &req, 1, NULL, -1, 1);
+bool ProcessGroupUCC::WorkUCX::wait(
+  std::chrono::milliseconds timeout /* unused */) {
+  torch_ucx_req_test(comm, &req, 1, nullptr, -1, 1);
   return true;
 }
 
 ProcessGroupUCC::WorkColl::~WorkColl() {
-  if (coll_req != NULL) {
+  if (coll_req != nullptr) {
     if (coll_ops.coll_test(coll_req) != TORCH_UCC_OK) {
       fprintf(
           stderr,
@@ -117,7 +119,8 @@ bool ProcessGroupUCC::WorkColl::isSuccess() const {
   return true;
 }
 
-bool ProcessGroupUCC::WorkColl::wait(std::chrono::milliseconds timeout) {
+bool ProcessGroupUCC::WorkColl::wait(
+  std::chrono::milliseconds timeout /* unused */) {
   while (!isCompleted()) {
   };
 
@@ -138,7 +141,7 @@ ProcessGroupUCC::ProcessGroupUCC(
     const c10::intrusive_ptr<Store>& store,
     int rank,
     int size)
-    : ProcessGroup(rank, size), store_(store), stop_progress_loop(false) {
+    : ProcessGroup(rank, size), store_(std::move(store)), stop_progress_loop(false) {
   torch_ucx_status_t st;
   torch_ucc_status_t st_ucc;
 
@@ -152,7 +155,7 @@ ProcessGroupUCC::ProcessGroupUCC(
   if (st_ucc != TORCH_UCC_OK) {
     throw std::runtime_error("ProcessGroupUCC failed to init collops");
   }
-  coll_comm = NULL;
+  coll_comm = nullptr;
 
   if (config.enable_progress_thread) {
     progress_thread = std::thread(&ProcessGroupUCC::progress_loop, this);
@@ -160,7 +163,7 @@ ProcessGroupUCC::ProcessGroupUCC(
 }
 
 torch_ucc_coll_comm_t* ProcessGroupUCC::get_coll_comm() {
-  if (coll_comm == NULL) {
+  if (coll_comm == nullptr) {
     torch_ucc_status_t st_ucc;
 
     st_ucc = coll_ops.coll_comm_init(ucx_comm, &coll_comm);
@@ -275,22 +278,22 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allreduce(
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allreduce_coalesced(
-    std::vector<at::Tensor>& tensors,
-    const AllreduceCoalescedOptions& opts) {
+    std::vector<at::Tensor>& tensors /* unused */,
+    const AllreduceCoalescedOptions& opts /* unused */) {
   throw std::runtime_error(
       "ProcessGroupUCC does not support allreduce_coalesced");
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::reduce(
-    std::vector<at::Tensor>& tensors,
-    const ReduceOptions& opts) {
+    std::vector<at::Tensor>& tensors /* unused */,
+    const ReduceOptions& opts /* unused */) {
   throw std::runtime_error("ProcessGroupUCC does not support reduce");
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allgather(
     std::vector<std::vector<at::Tensor>>& outputTensors,
     std::vector<at::Tensor>& inputTensors,
-    const AllgatherOptions& opts) {
+    const AllgatherOptions& opts /* unused */) {
   torch_ucc_coll_comm_t* ucc_comm;
   torch_ucc_coll_request_t* coll_req;
   torch_ucc_status_t st;
@@ -304,14 +307,14 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allgather(
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allgather_base(
-    at::Tensor& outputBuffer,
-    at::Tensor& inputBuffer,
-    const AllgatherOptions& opts) {
+    at::Tensor& outputBuffer /* unused */,
+    at::Tensor& inputBuffer /* unused */,
+    const AllgatherOptions& opts /* unused */) {
   throw std::runtime_error("ProcessGroupUCC does not support allgather_base");
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::barrier(
-    const BarrierOptions& opts) {
+    const BarrierOptions& opts /* unused */) {
   torch_ucc_coll_comm_t* ucc_comm;
   torch_ucc_coll_request_t* coll_req;
   torch_ucc_status_t st;
@@ -325,23 +328,23 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::barrier(
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::gather(
-    std::vector<std::vector<at::Tensor>>& outputTensors,
-    std::vector<at::Tensor>& inputTensors,
-    const GatherOptions& opts) {
+    std::vector<std::vector<at::Tensor>>& outputTensors /* unused */,
+    std::vector<at::Tensor>& inputTensors /* unused */,
+    const GatherOptions& opts /* unused */) {
   throw std::runtime_error("ProcessGroupUCC does not support gather");
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::scatter(
-    std::vector<at::Tensor>& outputTensors,
-    std::vector<std::vector<at::Tensor>>& inputTensors,
-    const ScatterOptions& opts) {
+    std::vector<at::Tensor>& outputTensors /* unused */,
+    std::vector<std::vector<at::Tensor>>& inputTensors /* unused */,
+    const ScatterOptions& opts /* unused */) {
   throw std::runtime_error("ProcessGroupUCC does not support scatter");
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::reduce_scatter(
-    std::vector<at::Tensor>& outputTensors,
-    std::vector<std::vector<at::Tensor>>& inputTensors,
-    const ReduceScatterOptions& opts) {
+    std::vector<at::Tensor>& outputTensors /* unused */,
+    std::vector<std::vector<at::Tensor>>& inputTensors /* unused */,
+    const ReduceScatterOptions& opts /* unused */) {
   throw std::runtime_error("ProcessGroupUCC does not support reduce_scatter");
 }
 
@@ -350,7 +353,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::alltoall_base(
     at::Tensor& inputTensor,
     std::vector<int64_t>& outputSplitSizes,
     std::vector<int64_t>& inputSplitSizes,
-    const AllToAllOptions& opts) {
+    const AllToAllOptions& opts /* unused */) {
   torch_ucc_coll_comm_t* ucc_comm;
   torch_ucc_coll_request_t* coll_req;
   torch_ucc_status_t st;
@@ -394,9 +397,9 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::alltoall_base(
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::alltoall(
-    std::vector<at::Tensor>& outputTensors,
-    std::vector<at::Tensor>& inputTensors,
-    const AllToAllOptions& opts) {
+    std::vector<at::Tensor>& outputTensors /* unused */,
+    std::vector<at::Tensor>& inputTensors /* unused */,
+    const AllToAllOptions& opts /* unused */) {
   throw std::runtime_error("ProcessGroupUCC does not support alltoall");
 }
 

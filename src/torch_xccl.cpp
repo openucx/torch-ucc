@@ -38,7 +38,7 @@ static xccl_status_t oob_allgather_test(void* req) {
   int rank, size, sendto, recvfrom, recvdatafrom, senddatafrom;
   torch_ucx_comm_t* oob_ctx =
       static_cast<torch_ucx_comm_t*>(oob_req->oob_coll_ctx);
-  char *tmpsend = NULL, *tmprecv = NULL;
+  char *tmpsend = nullptr, *tmprecv = nullptr;
   size_t msglen = oob_req->msglen;
   torch_ucx_status_t st;
 
@@ -70,7 +70,7 @@ static xccl_status_t oob_allgather_test(void* req) {
           oob_ctx,
           oob_req->reqs,
           oob_req->num_active_reqs,
-          NULL,
+          nullptr,
           1,
           oob_req->num_active_reqs);
       if (st == TORCH_UCX_INPROGRESS) {
@@ -109,7 +109,7 @@ static xccl_status_t oob_allgather_test(void* req) {
       oob_ctx,
       oob_req->reqs,
       oob_req->num_active_reqs,
-      NULL,
+      nullptr,
       1,
       oob_req->num_active_reqs);
   if (st == TORCH_UCX_INPROGRESS) {
@@ -190,7 +190,7 @@ torch_ucc_status_t torch_xccl_comm_init(
   lib_params.coll_types = XCCL_COLL_CAP_BCAST | XCCL_COLL_CAP_ALLREDUCE |
       XCCL_COLL_CAP_ALLTOALL | XCCL_COLL_CAP_ALLTOALLV;
 
-  cfg = NULL;
+  cfg = nullptr;
   st = xccl_lib_init(&lib_params, cfg, &xccl_comm->xccl_lib);
   if (st != XCCL_OK) {
     fprintf(stderr, "TorchUCC: failed to init XCCL lib\n");
@@ -207,7 +207,7 @@ torch_ucc_status_t torch_xccl_comm_init(
   }
 
   st =
-      xccl_context_config_read(xccl_comm->xccl_lib, "TORCH", NULL, &ctx_config);
+      xccl_context_config_read(xccl_comm->xccl_lib, "TORCH", nullptr, &ctx_config);
   if (st != XCCL_OK) {
     fprintf(stderr, "TorchUCC: failed to read XCCL context config\n");
     goto free_lib;
@@ -272,7 +272,7 @@ free_lib:
   xccl_lib_cleanup(xccl_comm->xccl_lib);
 free_comm:
   delete xccl_comm;
-  *comm = NULL;
+  *comm = nullptr;
   return TORCH_UCC_ERROR;
 }
 
