@@ -73,7 +73,7 @@ class ProcessGroupUCC : public ProcessGroup {
     friend class ProcessGroupUCC;
   };
 
-  explicit ProcessGroupUCC(
+  ProcessGroupUCC(
       const c10::intrusive_ptr<Store>& store,
       int rank = -1,
       int size = -1);
