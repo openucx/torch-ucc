@@ -6,8 +6,8 @@
 
 #pragma once
 
-#include <inttypes.h>
-#include <string.h>
+#include <cinttypes>
+#include <cstring>
 #include <map>
 #include <memory>
 
@@ -254,7 +254,7 @@ static inline torch_ucx_status_t torch_ucx_req_test(
   while (poll_count < 0 || n_polls++ < poll_count) {
     n_completed = 0;
     for (int i = 0; i < n_reqs; i++) {
-      if (NULL == reqs[i]) {
+      if (reqs[i] == nullptr) {
         if (completed_idx) {
           *completed_idx = i;
         }
@@ -264,7 +264,7 @@ static inline torch_ucx_status_t torch_ucx_req_test(
           torch_ucx_comm_progress(comm);
         } else {
           torch_ucx_request_free(reqs[i]);
-          reqs[i] = NULL;
+          reqs[i] = nullptr;
           if (completed_idx) {
             *completed_idx = i;
           }

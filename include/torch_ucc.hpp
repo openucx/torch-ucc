@@ -33,7 +33,7 @@ class ProcessGroupUCC : public ProcessGroup {
    public:
     WorkUCX(torch_ucx_request_t* request, torch_ucx_comm_t* ucx_comm)
         : req(request), comm(ucx_comm) {}
-    virtual ~WorkUCX();
+    virtual ~WorkUCX() override;
     bool isCompleted() override;
     bool isSuccess() const override;
     bool wait(std::chrono::milliseconds timeout = kUnsetTimeout) override;
@@ -54,7 +54,7 @@ class ProcessGroupUCC : public ProcessGroup {
           external_progress(false),
           scratch(nullptr) {}
 
-    virtual ~WorkColl();
+    virtual ~WorkColl() override;
     bool isCompleted() override;
     bool isSuccess() const override;
     bool wait(std::chrono::milliseconds timeout = kUnsetTimeout) override;
@@ -67,8 +67,8 @@ class ProcessGroupUCC : public ProcessGroup {
     char* scratch;
     std::vector<at::Tensor> src;
     std::vector<at::Tensor> dst;
-    bool no_progress;
-    torch_ucc_coll_request_t* coll_req;
+    bool no_progress{};
+    torch_ucc_coll_request_t* coll_req{};
 
     friend class ProcessGroupUCC;
   };
@@ -78,7 +78,7 @@ class ProcessGroupUCC : public ProcessGroup {
       int rank = -1,
       int size = -1);
 
-  virtual ~ProcessGroupUCC();
+  virtual ~ProcessGroupUCC() override;
 
   c10::intrusive_ptr<ProcessGroup::Work> broadcast(
       std::vector<at::Tensor>& data,
@@ -140,16 +140,16 @@ class ProcessGroupUCC : public ProcessGroup {
   c10::intrusive_ptr<ProcessGroup::Work> send(
       std::vector<at::Tensor>& tensors,
       int dstRank,
-      int tag);
+      int tag) override;
 
   c10::intrusive_ptr<ProcessGroup::Work> recv(
       std::vector<at::Tensor>& tensors,
       int srcRank,
-      int tag);
+      int tag) override;
 
   c10::intrusive_ptr<ProcessGroup::Work> recvAnysource(
       std::vector<at::Tensor>& tensors,
-      int tag);
+      int tag) override;
 
   static c10::intrusive_ptr<ProcessGroup> createProcessGroupUCC(
       const c10::intrusive_ptr<::c10d::Store>& store,
