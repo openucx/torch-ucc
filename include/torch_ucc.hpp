@@ -33,7 +33,7 @@ class ProcessGroupUCC : public ProcessGroup {
    public:
     WorkUCX(torch_ucx_request_t* request, torch_ucx_comm_t* ucx_comm)
         : req(request), comm(ucx_comm) {}
-    virtual ~WorkUCX() override;
+    ~WorkUCX() override;
     bool isCompleted() override;
     bool isSuccess() const override;
     bool wait(std::chrono::milliseconds timeout = kUnsetTimeout) override;
@@ -54,7 +54,7 @@ class ProcessGroupUCC : public ProcessGroup {
           external_progress(false),
           scratch(nullptr) {}
 
-    virtual ~WorkColl() override;
+    ~WorkColl() override;
     bool isCompleted() override;
     bool isSuccess() const override;
     bool wait(std::chrono::milliseconds timeout = kUnsetTimeout) override;
@@ -73,12 +73,12 @@ class ProcessGroupUCC : public ProcessGroup {
     friend class ProcessGroupUCC;
   };
 
-  ProcessGroupUCC(
+  explicit ProcessGroupUCC(
       const c10::intrusive_ptr<Store>& store,
       int rank = -1,
       int size = -1);
 
-  virtual ~ProcessGroupUCC() override;
+  ~ProcessGroupUCC() override;
 
   c10::intrusive_ptr<ProcessGroup::Work> broadcast(
       std::vector<at::Tensor>& data,
@@ -166,9 +166,9 @@ class ProcessGroupUCC : public ProcessGroup {
 
  protected:
   c10::intrusive_ptr<Store> store_;
-  torch_ucx_comm_t* ucx_comm;
+  torch_ucx_comm_t* ucx_comm{};
   torch_ucc_coll_comm_t* coll_comm;
-  torch_ucc_coll_ops_t coll_ops;
+  torch_ucc_coll_ops_t coll_ops{};
   std::mutex pg_mutex;
   std::thread progress_thread;
   bool stop_progress_loop;
@@ -185,7 +185,7 @@ class ProcessGroupUCC : public ProcessGroup {
  private:
   struct ucc_config {
     bool enable_progress_thread;
-  } config;
+  } config{};
 
   void read_config();
   void check_tensor(const std::vector<at::Tensor>& tensors);

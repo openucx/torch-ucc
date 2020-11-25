@@ -14,10 +14,19 @@ namespace c10d {
 
 struct torch_xccl_comm_t {
   torch_ucc_coll_comm_t super;
-  torch_ucx_comm_t* p2p_comm;
-  xccl_lib_h xccl_lib;
-  xccl_context_h xccl_ctx;
-  xccl_team_h xccl_team;
+  torch_ucx_comm_t* p2p_comm{};
+  xccl_lib_h xccl_lib{};
+  xccl_context_h xccl_ctx{};
+  xccl_team_h xccl_team{};
+};
+
+struct torch_xccl_request_t {
+  torch_ucc_coll_request_t super;
+  torch_xccl_comm_t* comm{};
+  xccl_coll_req_h request{};
+  xccl_collective_type_t coll_type;
+  torch_ucc_status_t status;
+  at::Tensor flat_tensor;
 };
 
 torch_ucc_status_t torch_xccl_comm_init(

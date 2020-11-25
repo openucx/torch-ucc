@@ -98,17 +98,6 @@ struct torch_ucx_request_t {
   torch_ucx_request_status_t status;
 };
 
-const std::map<c10::DeviceType, ucs_memory_type_t> ucs_mtype_map = {
-    {c10::kCPU, UCS_MEMORY_TYPE_HOST},
-    {c10::kCUDA, UCS_MEMORY_TYPE_CUDA},
-    {c10::kHIP, UCS_MEMORY_TYPE_ROCM},
-    {c10::kFPGA, UCS_MEMORY_TYPE_UNKNOWN},
-    {c10::kMSNPU, UCS_MEMORY_TYPE_UNKNOWN},
-    {c10::kXLA, UCS_MEMORY_TYPE_UNKNOWN},
-    {c10::kVulkan, UCS_MEMORY_TYPE_UNKNOWN},
-    {c10::kMetal, UCS_MEMORY_TYPE_UNKNOWN},
-};
-
 struct torch_ucx_comm_t {
   int size;
   int rank;

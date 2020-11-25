@@ -258,8 +258,8 @@ torch_ucc_status_t torch_xccl_comm_init(
     fprintf(stderr, "TorchUCC: failed to create XCCL team\n");
     goto free_context;
   }
-  while (XCCL_INPROGRESS == xccl_team_create_test(xccl_comm->xccl_team))
-    ;
+  while (XCCL_INPROGRESS == xccl_team_create_test(xccl_comm->xccl_team)) {
+  };
 #ifdef USE_CUDA
   xccl_comm->super.stream = nullptr;
 #endif
@@ -275,15 +275,6 @@ free_comm:
   *comm = nullptr;
   return TORCH_UCC_ERROR;
 }
-
-struct torch_xccl_request_t {
-  torch_ucc_coll_request_t super;
-  torch_xccl_comm_t* comm;
-  xccl_coll_req_h request;
-  xccl_collective_type_t coll_type;
-  torch_ucc_status_t status;
-  at::Tensor flat_tensor;
-};
 
 torch_ucc_status_t torch_xccl_comm_close(torch_ucc_coll_comm_t* comm) {
   torch_xccl_comm_t* xccl_comm = (torch_xccl_comm_t*)comm;
