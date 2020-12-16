@@ -176,7 +176,7 @@ class ProcessGroupUCC : public ProcessGroup {
   std::condition_variable queue_produce_cv;
   std::condition_variable queue_consume_cv;
 
-  void progress_loop();
+  void progress_loop(c10::DeviceIndex default_dev_idx);
   c10::intrusive_ptr<ProcessGroup::Work> enqueue_request(
       torch_ucc_coll_request_t* req,
       void* scratch);

@@ -30,13 +30,13 @@ struct torch_ucc_coll_comm_t {
 };
 
 struct torch_ucc_coll_request_t {
-  c10::DeviceIndex dev_index;
-  c10::DeviceType dev_type;
+  c10::Device device;
   std::vector<at::Tensor> src;
   std::vector<at::Tensor> dst;
 #ifdef USE_CUDA
   at::cuda::CUDAEvent tensor_ready;
 #endif
+  torch_ucc_coll_request_t(): device(c10::DeviceType::CPU) {}
 };
 
 struct torch_ucc_coll_ops_t {
@@ -98,18 +98,16 @@ inline void torch_ucc_coll_request_init(
     torch_ucc_coll_request_t* request,
     std::vector<at::Tensor>* srcPtr,
     std::vector<at::Tensor>* dstPtr) {
-  request->dev_type = c10::DeviceType::CPU;
   if (srcPtr) {
     request->src = *srcPtr;
-    request->dev_index = request->src[0].device().index();
-    request->dev_type = request->src[0].device().type();
+    request->device = request->src[0].device();
 #ifdef USE_CUDA
-    if (request->src[0].is_cuda()) {
+    if (request->device.is_cuda()) {
       request->tensor_ready.record(
-          at::cuda::getCurrentCUDAStream(request->dev_index));
+          at::cuda::getCurrentCUDAStream(request->device.index()));
       if (coll_comm->stream == nullptr) {
         coll_comm->stream = std::make_unique<at::cuda::CUDAStream>(
-            at::cuda::getStreamFromPool(request->dev_index));
+            at::cuda::getStreamFromPool(request->device.index()));
       }
       request->tensor_ready.block(*coll_comm->stream);
     }

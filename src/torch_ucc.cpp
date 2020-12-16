@@ -9,7 +9,6 @@
 #include <utility>
 #ifdef USE_CUDA
 #include <c10/cuda/CUDAGuard.h>
-#include <cuda.h>
 #endif
 #include <cstdio>
 
@@ -169,7 +168,11 @@ ProcessGroupUCC::ProcessGroupUCC(
   coll_comm = nullptr;
 
   if (config.enable_progress_thread) {
-    progress_thread = std::thread(&ProcessGroupUCC::progress_loop, this);
+    c10::DeviceIndex dev_idx = 0;
+#ifdef USE_CUDA
+    dev_idx = c10::cuda::current_device();
+#endif
+    progress_thread = std::thread(&ProcessGroupUCC::progress_loop, this, dev_idx);
   }
 }
 
@@ -187,16 +190,15 @@ torch_ucc_coll_comm_t* ProcessGroupUCC::get_coll_comm() {
   return coll_comm;
 }
 
-void ProcessGroupUCC::progress_loop() {
+void ProcessGroupUCC::progress_loop(c10::DeviceIndex default_dev_idx) {
   std::unique_lock<std::mutex> lock(pg_mutex);
   torch_ucc_status_t st;
-
 #ifdef USE_CUDA
-  auto device = c10::Device(c10::DeviceType::CUDA, (c10::DeviceIndex)0);
-  at::cuda::OptionalCUDAGuard guard(device);
-  cudaSetDevice(0);
+  at::cuda::OptionalCUDAGuard guard(default_dev_idx);
+  if (default_dev_idx == 0) {
+    c10::cuda::set_device(default_dev_idx);
+  }
 #endif
-
   while (!stop_progress_loop) {
     if (progress_list.empty()) {
       queue_produce_cv.wait(lock);
@@ -207,8 +209,8 @@ void ProcessGroupUCC::progress_loop() {
     lock.unlock();
     queue_consume_cv.notify_one();
 #ifdef USE_CUDA
-    if (work_coll->coll_req->dev_type == c10::DeviceType::CUDA) {
-      guard.set_index(work_coll->coll_req->dev_index);
+    if (work_coll->coll_req->device.is_cuda()) {
+      guard.set_index(work_coll->coll_req->device.index());
     }
 #endif
     do {
@@ -264,6 +266,8 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::broadcast(
   torch_ucc_coll_request_t* coll_req;
   torch_ucc_status_t st;
 
+  check_tensor(tensors);
+  c10::DeviceGuard guard(tensors[0].device());
   ucc_comm = get_coll_comm();
   st = coll_ops.broadcast(ucc_comm, tensors, opts.rootRank, &coll_req);
   if (st != TORCH_UCC_OK) {
@@ -279,6 +283,8 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allreduce(
   torch_ucc_coll_request_t* coll_req;
   torch_ucc_status_t st;
 
+  check_tensor(tensors);
+  c10::DeviceGuard guard(tensors[0].device());
   ucc_comm = get_coll_comm();
   st = coll_ops.allreduce(ucc_comm, tensors, opts, &coll_req);
   if (st != TORCH_UCC_OK) {
@@ -309,6 +315,8 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allgather(
   torch_ucc_coll_request_t* coll_req;
   torch_ucc_status_t st;
 
+  check_tensor(inputTensors);
+  c10::DeviceGuard guard(inputTensors[0].device());
   ucc_comm = get_coll_comm();
   st = coll_ops.allgather(ucc_comm, inputTensors, outputTensors[0], &coll_req);
   if (st != TORCH_UCC_OK) {
@@ -370,6 +378,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::alltoall_base(
   torch_ucc_status_t st;
   uint32_t* scratch;
 
+  c10::DeviceGuard guard(inputTensor.device());
   ucc_comm = get_coll_comm();
   if ((outputSplitSizes.size() == 0) && (inputSplitSizes.size() == 0)) {
     scratch = nullptr;
