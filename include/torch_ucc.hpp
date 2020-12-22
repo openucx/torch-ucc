@@ -52,6 +52,7 @@ class ProcessGroupUCC : public ProcessGroup {
         : coll_ops(ops),
           work_list(list),
           external_progress(false),
+          blocking_wait(false),
           scratch(nullptr) {}
 
     ~WorkColl() override;
@@ -64,10 +65,10 @@ class ProcessGroupUCC : public ProcessGroup {
     std::list<c10::intrusive_ptr<WorkColl>>& work_list;
     std::list<c10::intrusive_ptr<WorkColl>>::iterator work_list_entry;
     bool external_progress;
+    bool blocking_wait;
     char* scratch;
     std::vector<at::Tensor> src;
     std::vector<at::Tensor> dst;
-    bool no_progress{};
     torch_ucc_coll_request_t* coll_req{};
 
     friend class ProcessGroupUCC;
@@ -185,6 +186,7 @@ class ProcessGroupUCC : public ProcessGroup {
  private:
   struct ucc_config {
     bool enable_progress_thread;
+    bool blocking_wait;
   } config{};
 
   void read_config();

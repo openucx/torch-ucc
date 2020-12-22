@@ -27,10 +27,14 @@ struct torch_xccl_request_t {
   xccl_collective_type_t coll_type;
   torch_ucc_status_t status;
   at::Tensor flat_tensor;
+#ifdef USE_CUDA
+  cudaStream_t stream;
+#endif
 };
 
 torch_ucc_status_t torch_xccl_comm_init(
     torch_ucx_comm_t* p2p_comm,
+    torch_ucc_coll_config_t* coll_config,
     torch_ucc_coll_comm_t** comm);
 
 torch_ucc_status_t torch_xccl_comm_close(torch_ucc_coll_comm_t* comm);

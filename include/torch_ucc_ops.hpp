@@ -22,11 +22,15 @@ enum torch_ucc_status_t {
   TORCH_UCC_ERROR = -1,
 };
 
+struct torch_ucc_coll_config_t {
+  bool blocking_wait;
+};
+
 struct torch_ucc_coll_comm_t {
 #ifdef USE_CUDA
   std::unique_ptr<at::cuda::CUDAStream> stream;
 #endif
-  int dummy;
+  torch_ucc_coll_config_t config;
 };
 
 struct torch_ucc_coll_request_t {
@@ -35,6 +39,7 @@ struct torch_ucc_coll_request_t {
   std::vector<at::Tensor> dst;
 #ifdef USE_CUDA
   at::cuda::CUDAEvent tensor_ready;
+  at::cuda::CUDAEvent finished;
 #endif
   torch_ucc_coll_request_t(): device(c10::DeviceType::CPU) {}
 };
@@ -42,6 +47,7 @@ struct torch_ucc_coll_request_t {
 struct torch_ucc_coll_ops_t {
   torch_ucc_status_t (*coll_comm_init)(
       torch_ucx_comm_t* p2p_comm,
+      torch_ucc_coll_config_t* coll_config,
       torch_ucc_coll_comm_t** coll_comm);
 
   torch_ucc_status_t (*allgather)(
@@ -85,6 +91,8 @@ struct torch_ucc_coll_ops_t {
   torch_ucc_status_t (*coll_progress)(torch_ucc_coll_request_t* request);
 
   torch_ucc_status_t (*coll_test)(torch_ucc_coll_request_t* request);
+
+  torch_ucc_status_t (*coll_fence)(torch_ucc_coll_request_t* request);
 
   torch_ucc_status_t (*coll_finalize)(torch_ucc_coll_request_t* request);
 

@@ -120,7 +120,6 @@ bool ProcessGroupUCC::WorkColl::isCompleted() {
   } else {
     st = coll_ops.coll_test(coll_req);
   }
-
   return (st != TORCH_UCC_INPROGRESS);
 }
 
@@ -131,9 +130,17 @@ bool ProcessGroupUCC::WorkColl::isSuccess() const {
 
 bool ProcessGroupUCC::WorkColl::wait(
   std::chrono::milliseconds /* unused */) {
-  while (!isCompleted()) {
-  };
+  if (blocking_wait || !coll_req->device.is_cuda()) {
+    while (!isCompleted()) {
+    };
+  } else {
+    torch_ucc_status_t st;
+    do {
+  /* spin in a loop while collective is not started */
+      st = coll_ops.coll_fence(coll_req);
+    } while (st != TORCH_UCC_OK);
 
+  }
   return true;
 }
 
@@ -144,6 +151,11 @@ void ProcessGroupUCC::read_config() {
   env = std::getenv("TORCH_UCC_THREAD_ENABLE");
   if (env) {
     config.enable_progress_thread = std::atoi(env);
+  }
+  config.blocking_wait = true;
+  env = std::getenv("TORCH_UCC_BLOCKING_WAIT");
+  if (env) {
+    config.blocking_wait = std::atoi(env);
   }
 }
 
@@ -179,8 +191,10 @@ ProcessGroupUCC::ProcessGroupUCC(
 torch_ucc_coll_comm_t* ProcessGroupUCC::get_coll_comm() {
   if (coll_comm == nullptr) {
     torch_ucc_status_t st_ucc;
+    torch_ucc_coll_config_t cfg;
 
-    st_ucc = coll_ops.coll_comm_init(ucx_comm, &coll_comm);
+    cfg.blocking_wait = config.blocking_wait;
+    st_ucc = coll_ops.coll_comm_init(ucx_comm, &cfg, &coll_comm);
     if (st_ucc != TORCH_UCC_OK) {
       throw std::runtime_error(
           "ProcessGroupUCC failed to init collective comm");
@@ -235,6 +249,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::enqueue_request(
       c10::make_intrusive<ProcessGroupUCC::WorkColl>(coll_ops, progress_list));
   (*iter)->work_list_entry = iter;
   (*iter)->coll_req = req;
+  (*iter)->blocking_wait = config.blocking_wait;
   (*iter)->external_progress = config.enable_progress_thread;
   (*iter)->scratch = (char*)scratch;
   auto workreq = (*iter);

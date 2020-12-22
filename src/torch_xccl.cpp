@@ -171,6 +171,7 @@ static inline xccl_tl_id_t xccl_tls_str_to_bitmap(const char* tls_str) {
 
 torch_ucc_status_t torch_xccl_comm_init(
     torch_ucx_comm_t* p2p_comm,
+    torch_ucc_coll_config_t* coll_config,
     torch_ucc_coll_comm_t** comm) {
   torch_xccl_comm_t* xccl_comm;
   xccl_lib_params_t lib_params;
@@ -199,7 +200,7 @@ torch_ucc_status_t torch_xccl_comm_init(
 
   xccl_context_config_t* ctx_config;
   uint64_t tls;
-  tls_str = getenv("TORCH_UCC_XCCL_TLS");
+  tls_str = getenv("TORCH_UCC_TLS");
   if (tls_str) {
     tls = xccl_tls_str_to_bitmap(tls_str);
   } else {
@@ -263,6 +264,13 @@ torch_ucc_status_t torch_xccl_comm_init(
 #ifdef USE_CUDA
   xccl_comm->super.stream = nullptr;
 #endif
+  xccl_comm->super.config = *coll_config;
+  if (p2p_comm->rank == 0) {
+    //TODO: add TLS configuration print
+    LOG(INFO) << "ProcessGroupUCC initialized with following options:"
+              << "\nTORCH_UCC_BLOCKING_WAIT: " <<
+                 xccl_comm->super.config.blocking_wait;
+  }
   *comm = (torch_ucc_coll_comm_t*)xccl_comm;
 
   return TORCH_UCC_OK;
@@ -304,6 +312,22 @@ std::map<at::ScalarType, xccl_dt_t> xccl_type_map = {
     {at::kLong, XCCL_DT_INT64},
 };
 
+static void coll_args_init_with_stream(xccl_coll_op_args_t *coll_args,
+                                       torch_xccl_comm_t* xccl_comm,
+                                       torch_xccl_request_t* coll_req) {
+/* Non-blocking stream mode supported only for CUDA buffers */
+#ifdef USE_CUDA
+  if ((xccl_comm->super.config.blocking_wait) ||
+      (!coll_req->super.device.is_cuda())) {
+        return;
+      }
+  coll_req->stream = xccl_comm->super.stream->stream();
+  coll_args->field_mask |= XCCL_COLL_OP_ARGS_FIELD_STREAM;
+  coll_args->stream.type = XCCL_STREAM_TYPE_CUDA;
+  coll_args->stream.stream = (void*)(&coll_req->stream);
+#endif
+}
+
 torch_ucc_status_t torch_xccl_allgather(
     torch_ucc_coll_comm_t* coll_comm,
     std::vector<at::Tensor>& input_tensors,
@@ -328,12 +352,13 @@ torch_ucc_status_t torch_xccl_allgather(
 
   buf_len = input_tensors[0].element_size() * input_tensors[0].numel() *
       xccl_comm->p2p_comm->size;
+  coll_args.field_mask = 0;
   coll_args.coll_type = XCCL_ALLGATHER;
   coll_args.buffer_info.src_buffer = input_tensors[0].data_ptr();
   coll_args.buffer_info.dst_buffer = coll_req->flat_tensor.data_ptr();
   coll_args.buffer_info.len = buf_len;
   coll_args.alg.set_by_user = 0;
-
+  coll_args_init_with_stream(&coll_args, xccl_comm, coll_req);
   XCCL_CHECK_GOTO(
       xccl_collective_init(&coll_args, &xccl_req, xccl_comm->xccl_team), error);
   coll_req->request = xccl_req;
@@ -371,12 +396,13 @@ torch_ucc_status_t torch_xccl_alltoall(
 
   buf_len = input_tensor.element_size() * input_tensor.numel() /
       xccl_comm->p2p_comm->size;
+  coll_args.field_mask = 0;
   coll_args.coll_type = XCCL_ALLTOALL;
   coll_args.buffer_info.src_buffer = input_tensor.data_ptr();
   coll_args.buffer_info.dst_buffer = output_tensor.data_ptr();
   coll_args.buffer_info.len = buf_len;
   coll_args.alg.set_by_user = 0;
-
+  coll_args_init_with_stream(&coll_args, xccl_comm, coll_req);
   XCCL_CHECK_GOTO(
       xccl_collective_init(&coll_args, &xccl_req, xccl_comm->xccl_team), error);
   coll_req->request = xccl_req;
@@ -415,6 +441,7 @@ torch_ucc_status_t torch_xccl_alltoallv(
   coll_req->comm = xccl_comm;
   coll_req->status = TORCH_UCC_OPERATION_INITIALIZED;
 
+  coll_args.field_mask = 0;
   coll_args.coll_type = XCCL_ALLTOALLV;
   coll_args.buffer_info.src_buffer = input_tensor.data_ptr();
   coll_args.buffer_info.src_displacements = send_offsets;
@@ -427,7 +454,7 @@ torch_ucc_status_t torch_xccl_alltoallv(
   coll_args.buffer_info.dst_datatype =
       xccl_type_map.at(output_tensor.scalar_type());
   coll_args.alg.set_by_user = 0;
-
+  coll_args_init_with_stream(&coll_args, xccl_comm, coll_req);
   XCCL_CHECK_GOTO(
       xccl_collective_init(&coll_args, &xccl_req, xccl_comm->xccl_team), error);
   coll_req->request = xccl_req;
@@ -457,6 +484,7 @@ torch_ucc_status_t torch_xccl_allreduce(
   coll_req->comm = xccl_comm;
   coll_req->status = TORCH_UCC_OPERATION_INITIALIZED;
 
+  coll_args.field_mask = 0;
   coll_args.coll_type = XCCL_ALLREDUCE;
   coll_args.buffer_info.src_buffer = tensors[0].data_ptr();
   coll_args.buffer_info.dst_buffer = tensors[0].data_ptr();
@@ -465,7 +493,7 @@ torch_ucc_status_t torch_xccl_allreduce(
   coll_args.reduce_info.op = xccl_op_map.at(opts.reduceOp);
   coll_args.reduce_info.count = tensors[0].numel();
   coll_args.alg.set_by_user = 0;
-
+  coll_args_init_with_stream(&coll_args, xccl_comm, coll_req);
   XCCL_CHECK_GOTO(
       xccl_collective_init(&coll_args, &xccl_req, xccl_comm->xccl_team), error);
   coll_req->request = xccl_req;
@@ -493,6 +521,7 @@ torch_ucc_status_t torch_xccl_barrier(
   coll_req->comm = xccl_comm;
   coll_req->status = TORCH_UCC_OPERATION_INITIALIZED;
 
+  coll_args.field_mask = 0;
   coll_args.coll_type = XCCL_BARRIER;
   coll_args.alg.set_by_user = 0;
   XCCL_CHECK_GOTO(
@@ -524,13 +553,14 @@ torch_ucc_status_t torch_xccl_broadcast(
   coll_req->comm = xccl_comm;
   coll_req->status = TORCH_UCC_OPERATION_INITIALIZED;
 
+  coll_args.field_mask = 0;
   coll_args.coll_type = XCCL_BCAST;
   coll_args.buffer_info.src_buffer = tensors[0].data_ptr();
   coll_args.buffer_info.dst_buffer = tensors[0].data_ptr();
   coll_args.buffer_info.len = tensors[0].numel() * tensors[0].element_size();
   coll_args.root = root;
   coll_args.alg.set_by_user = 0;
-
+  coll_args_init_with_stream(&coll_args, xccl_comm, coll_req);
   XCCL_CHECK_GOTO(
       xccl_collective_init(&coll_args, &xccl_req, xccl_comm->xccl_team), error);
   coll_req->request = xccl_req;
@@ -558,6 +588,13 @@ torch_ucc_status_t torch_xccl_progress(torch_ucc_coll_request_t* request) {
     }
 #endif
     xccl_collective_post(req->request);
+#ifdef USE_CUDA
+    /* Record event that later can be used for fence */
+    if ((req->super.device.is_cuda()) &&
+        (!req->comm->super.config.blocking_wait)) {
+        req->super.finished.record(*req->comm->super.stream);
+    }
+#endif
     req->status = TORCH_UCC_INPROGRESS;
   }
 
@@ -592,7 +629,19 @@ torch_ucc_status_t torch_xccl_test(torch_ucc_coll_request_t* request) {
       (req->status == TORCH_UCC_OPERATION_INITIALIZED)) {
     return TORCH_UCC_INPROGRESS;
   }
+  return req->status;
+}
 
+torch_ucc_status_t torch_xccl_fence(torch_ucc_coll_request_t* request) {
+  torch_xccl_request_t* req = (torch_xccl_request_t*)request;
+
+  if (req->status == TORCH_UCC_INPROGRESS) {
+#ifdef USE_CUDA
+    auto current_stream = at::cuda::getCurrentCUDAStream(req->super.device.index());
+    req->super.finished.block(current_stream);
+#endif
+    return TORCH_UCC_OK;
+  }
   return req->status;
 }
 
@@ -611,6 +660,7 @@ torch_ucc_coll_ops_t xccl_coll_ops{torch_xccl_comm_init,
                                    torch_xccl_broadcast,
                                    torch_xccl_progress,
                                    torch_xccl_test,
+                                   torch_xccl_fence,
                                    torch_xccl_free,
                                    torch_xccl_comm_close};
 
