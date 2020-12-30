@@ -121,7 +121,6 @@ inline void torch_ucc_coll_request_init(
     }
 #endif
   }
-
   if (dstPtr) {
     request->dst = *dstPtr;
     if (request->src[0].device() != request->dst[0].device()) {

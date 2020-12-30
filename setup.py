@@ -20,6 +20,14 @@ if xccl_home is None:
   print("Couldn't find XCCL install dir, please set XCCL_HOME env variable")
   sys.exit(1)
 
+plugin_compile_args = []
+enable_debug = os.environ.get("ENABLE_DEBUG")
+if enable_debug is None or enable_debug == "no":
+  print("Release build")
+else:
+  print("Debug build")
+  plugin_compile_args.extend(["-g", "-O0"])
+
 plugin_sources      = ["src/torch_ucc.cpp",
                        "src/torch_ucc_sendrecv.cpp",
                        "src/torch_xccl.cpp"]
@@ -29,7 +37,6 @@ plugin_include_dirs = ["{}/include/".format(ucc_plugin_dir),
 plugin_library_dirs = ["{}/lib/".format(ucx_home),
                        "{}/lib/".format(xccl_home)]
 plugin_libraries    = ["ucp", "uct", "ucm", "ucs", "xccl"]
-plugin_compile_args = ["-g", "-O0", "-DWITH_XCCL"]
 
 with_cuda = os.environ.get("WITH_CUDA")
 if with_cuda is None or with_cuda == "no":

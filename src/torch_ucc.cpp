@@ -224,7 +224,7 @@ void ProcessGroupUCC::progress_loop(c10::DeviceIndex default_dev_idx) {
     queue_consume_cv.notify_one();
 #ifdef USE_CUDA
     if (work_coll->coll_req->device.is_cuda()) {
-      guard.set_index(work_coll->coll_req->device.index());
+      guard.set_device(work_coll->coll_req->device);
     }
 #endif
     do {
@@ -270,7 +270,9 @@ ProcessGroupUCC::~ProcessGroupUCC() {
   if (progress_list.size() != 0) {
     fprintf(stderr, "ProcessGroupUCC: warnning progress list is not empty\n");
   }
-  coll_ops.coll_comm_close(coll_comm);
+  if (coll_comm != nullptr) {
+    coll_ops.coll_comm_close(coll_comm);
+  }
   torch_ucx_comm_close(ucx_comm, store_);
 }
 
