@@ -1,5 +1,5 @@
 # Torch-UCC
-The Torch-UCC plugin is a research prototype that enables collective communication over XCCL for distributed PyTorch applications that load the plugin at application runtime. The XCCL interface is a non-standard API with a corresponding [reference implementation](https://github.com/openucx/xccl) used to guide design decisions for the [UCC project](https://www.ucfconsortium.org/projects/ucc/).  
+The Torch-UCC plugin is a research prototype that enables collective communication over XCCL for distributed PyTorch applications that load the plugin at application runtime. The XCCL interface is a non-standard API with a corresponding [reference implementation](https://github.com/openucx/xccl) used to guide design decisions for the [UCC project](https://www.ucfconsortium.org/projects/ucc/).
 
 ## Licenses
 The torch-ucc plugin is licensed as:
@@ -31,11 +31,13 @@ WITH_CUDA optional, if WITH_CUDA=no is set then only CPU tensors are supported
 
 ## Run
 Configuration variables
-| Name                    | Values      | Description                                                                                                                                                                |
-|-------------------------|-------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| TORCH_UCC_THREAD_ENABLE | 0 or 1      | If not equal to zero then dedicated thread will be used to progress point to point and collective operations. |
-| TORCH_UCC_TLS           | list of xccl team libraries | Allows to choose what xccl team libraries will be used |
- 
+| Name                           | Values                      | Description                                                                                                   |
+|--------------------------------|-----------------------------|---------------------------------------------------------------------------------------------------------------|
+| TORCH_UCC_THREAD_ENABLE        | 0 or 1                      | If not equal to zero then dedicated thread will be used to progress point to point and collective operations. |
+| TORCH_UCC_TLS                  | list of xccl team libraries | Allows to choose what xccl team libraries will be used |
+| TORCH_UCC_BLOCKING_WAIT        | 0 or 1                      | Experimenal, defines behavior of wait function for cuda buffers |
+| TORCH_UCC_HIGH_PRIORITY_STREAM | 0 or 1                      | Internal stream priority, relevant only when BLOCKING_WAIT is set to zero |
+
 ```shell
 export LD_LIBRARY_PATH=<PATH_TO_UCX>/lib:<PATH_TO_XCCL>/lib:$LD_LIBRARY_PATH
 python example.py

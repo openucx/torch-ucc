@@ -157,6 +157,11 @@ void ProcessGroupUCC::read_config() {
   if (env) {
     config.blocking_wait = std::atoi(env);
   }
+  config.high_priority_stream = false;
+  env = std::getenv("TORCH_UCC_HIGH_PRIORITY_STREAM");
+  if (env) {
+    config.high_priority_stream = std::atoi(env);
+  }
 }
 
 ProcessGroupUCC::ProcessGroupUCC(
@@ -194,6 +199,7 @@ torch_ucc_coll_comm_t* ProcessGroupUCC::get_coll_comm() {
     torch_ucc_coll_config_t cfg;
 
     cfg.blocking_wait = config.blocking_wait;
+    cfg.high_priority_stream = config.high_priority_stream;
     st_ucc = coll_ops.coll_comm_init(ucx_comm, &cfg, &coll_comm);
     if (st_ucc != TORCH_UCC_OK) {
       throw std::runtime_error(

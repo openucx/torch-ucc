@@ -187,6 +187,7 @@ class ProcessGroupUCC : public ProcessGroup {
   struct ucc_config {
     bool enable_progress_thread;
     bool blocking_wait;
+    bool high_priority_stream;
   } config{};
 
   void read_config();

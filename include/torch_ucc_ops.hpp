@@ -24,6 +24,7 @@ enum torch_ucc_status_t {
 
 struct torch_ucc_coll_config_t {
   bool blocking_wait;
+  bool high_priority_stream;
 };
 
 struct torch_ucc_coll_comm_t {
@@ -115,7 +116,8 @@ inline void torch_ucc_coll_request_init(
           at::cuda::getCurrentCUDAStream(request->device.index()));
       if (coll_comm->stream == nullptr) {
         coll_comm->stream = std::make_unique<at::cuda::CUDAStream>(
-            at::cuda::getStreamFromPool(request->device.index()));
+            at::cuda::getStreamFromPool(coll_comm->config.high_priority_stream,
+                                        request->device.index()));
       }
       request->tensor_ready.block(*coll_comm->stream);
     }

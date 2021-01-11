@@ -269,7 +269,9 @@ torch_ucc_status_t torch_xccl_comm_init(
     //TODO: add TLS configuration print
     LOG(INFO) << "ProcessGroupUCC initialized with following options:"
               << "\nTORCH_UCC_BLOCKING_WAIT: " <<
-                 xccl_comm->super.config.blocking_wait;
+                 xccl_comm->super.config.blocking_wait <<
+                 "\nTORCH_UCC_HIGH_PRIORITY_STREAM: " <<
+                 xccl_comm->super.config.high_priority_stream;
   }
   *comm = (torch_ucc_coll_comm_t*)xccl_comm;
 
