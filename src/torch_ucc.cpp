@@ -1,5 +1,5 @@
 /**
- * * Copyright (C) Mellanox Technologies Ltd. 2001-2020.  ALL RIGHTS RESERVED.
+ * * Copyright (C) Mellanox Technologies Ltd. 2020-2021.  ALL RIGHTS RESERVED.
  * *
  * * See file LICENSE for terms.
  * */
@@ -134,12 +134,7 @@ bool ProcessGroupUCC::WorkColl::wait(
     while (!isCompleted()) {
     };
   } else {
-    torch_ucc_status_t st;
-    do {
-  /* spin in a loop while collective is not started */
-      st = coll_ops.coll_fence(coll_req);
-    } while (st != TORCH_UCC_OK);
-
+    coll_ops.coll_fence(coll_req);
   }
   return true;
 }

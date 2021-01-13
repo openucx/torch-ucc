@@ -1,5 +1,5 @@
 /**
- * * Copyright (C) Mellanox Technologies Ltd. 2020.  ALL RIGHTS RESERVED.
+ * * Copyright (C) Mellanox Technologies Ltd. 2020-2021.  ALL RIGHTS RESERVED.
  * *
  * * See file LICENSE for terms.
  * */
@@ -9,6 +9,8 @@
 #include <c10d/ProcessGroup.hpp>
 #include <c10d/Types.hpp>
 #include <torch_ucc_sendrecv.hpp>
+#include <queue>
+#include <mutex>
 #ifdef USE_CUDA
 #include <ATen/cuda/CUDAEvent.h>
 #include <c10/cuda/CUDAStream.h>
@@ -30,19 +32,31 @@ struct torch_ucc_coll_config_t {
 struct torch_ucc_coll_comm_t {
 #ifdef USE_CUDA
   std::unique_ptr<at::cuda::CUDAStream> stream;
+  std::queue<std::unique_ptr<at::cuda::CUDAEvent>> event_pool;
+  std::mutex event_pool_mutex;
 #endif
   torch_ucc_coll_config_t config;
 };
 
 struct torch_ucc_coll_request_t {
+  torch_ucc_coll_comm_t *coll_comm;
   c10::Device device;
   std::vector<at::Tensor> src;
   std::vector<at::Tensor> dst;
 #ifdef USE_CUDA
-  at::cuda::CUDAEvent tensor_ready;
-  at::cuda::CUDAEvent finished;
+  std::unique_ptr<at::cuda::CUDAEvent> tnsr_ready;
+  std::unique_ptr<at::cuda::CUDAEvent> coll_finished;
 #endif
   torch_ucc_coll_request_t(): device(c10::DeviceType::CPU) {}
+  ~torch_ucc_coll_request_t() {
+#ifdef USE_CUDA
+    if (device.is_cuda()) {
+      std::lock_guard<std::mutex> lock(coll_comm->event_pool_mutex);
+      coll_comm->event_pool.push(std::move(tnsr_ready));
+      coll_comm->event_pool.push(std::move(coll_finished));
+    }
+#endif
+  }
 };
 
 struct torch_ucc_coll_ops_t {
@@ -107,19 +121,33 @@ inline void torch_ucc_coll_request_init(
     torch_ucc_coll_request_t* request,
     std::vector<at::Tensor>* srcPtr,
     std::vector<at::Tensor>* dstPtr) {
+  request->coll_comm = coll_comm;
   if (srcPtr) {
     request->src = *srcPtr;
     request->device = request->src[0].device();
 #ifdef USE_CUDA
+    request->tnsr_ready = nullptr;
+    request->coll_finished = nullptr;
     if (request->device.is_cuda()) {
-      request->tensor_ready.record(
-          at::cuda::getCurrentCUDAStream(request->device.index()));
+      std::lock_guard<std::mutex> lock(coll_comm->event_pool_mutex);
       if (coll_comm->stream == nullptr) {
         coll_comm->stream = std::make_unique<at::cuda::CUDAStream>(
             at::cuda::getStreamFromPool(coll_comm->config.high_priority_stream,
                                         request->device.index()));
       }
-      request->tensor_ready.block(*coll_comm->stream);
+      if (coll_comm->event_pool.empty()) {
+        request->tnsr_ready = std::make_unique<at::cuda::CUDAEvent>();
+        request->coll_finished = std::make_unique<at::cuda::CUDAEvent>();
+      } else {
+        request->tnsr_ready = std::move(coll_comm->event_pool.front());
+        coll_comm->event_pool.pop();
+        request->coll_finished = std::move(coll_comm->event_pool.front());
+        coll_comm->event_pool.pop();
+      }
+      request->tnsr_ready->record(
+          at::cuda::getCurrentCUDAStream(request->device.index()));
+      request->tnsr_ready->block(*coll_comm->stream);
+
     }
 #endif
   }

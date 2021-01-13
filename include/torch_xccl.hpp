@@ -1,5 +1,5 @@
 /**
- * * Copyright (C) Mellanox Technologies Ltd. 2020.  ALL RIGHTS RESERVED.
+ * * Copyright (C) Mellanox Technologies Ltd. 2020-2021.  ALL RIGHTS RESERVED.
  * *
  * * See file LICENSE for terms.
  * */
@@ -22,7 +22,6 @@ struct torch_xccl_comm_t {
 
 struct torch_xccl_request_t {
   torch_ucc_coll_request_t super;
-  torch_xccl_comm_t* comm{};
   xccl_coll_req_h request{};
   xccl_collective_type_t coll_type;
   torch_ucc_status_t status;
