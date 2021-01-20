@@ -147,11 +147,35 @@ void ProcessGroupUCC::read_config() {
   if (env) {
     config.enable_progress_thread = std::atoi(env);
   }
-  config.blocking_wait = true;
-  env = std::getenv("TORCH_UCC_BLOCKING_WAIT");
-  if (env) {
-    config.blocking_wait = std::atoi(env);
+
+  for (int i = 0; i < TORCH_UCC_COLL_LAST; i++) {
+    config.blocking_wait[i] = true;
   }
+  env = std::getenv("TORCH_UCC_ALLGATHER_BLOCKING_WAIT");
+  if (env) {
+    config.blocking_wait[TORCH_UCC_ALLGATHER] = std::atoi(env);
+  }
+  env = std::getenv("TORCH_UCC_ALLREDUCE_BLOCKING_WAIT");
+  if (env) {
+    config.blocking_wait[TORCH_UCC_ALLREDUCE] = std::atoi(env);
+  }
+  env = std::getenv("TORCH_UCC_ALLTOALL_BLOCKING_WAIT");
+  if (env) {
+    config.blocking_wait[TORCH_UCC_ALLTOALL] = std::atoi(env);
+  }
+  env = std::getenv("TORCH_UCC_ALLTOALLV_BLOCKING_WAIT");
+  if (env) {
+    config.blocking_wait[TORCH_UCC_ALLTOALLV] = std::atoi(env);
+  }
+  env = std::getenv("TORCH_UCC_BCAST_BLOCKING_WAIT");
+  if (env) {
+    config.blocking_wait[TORCH_UCC_BCAST] = std::atoi(env);
+  }
+  env = std::getenv("TORCH_UCC_BARRIER_BLOCKING_WAIT");
+  if (env) {
+    config.blocking_wait[TORCH_UCC_BARRIER] = std::atoi(env);
+  }
+
   config.high_priority_stream = false;
   env = std::getenv("TORCH_UCC_HIGH_PRIORITY_STREAM");
   if (env) {
@@ -193,7 +217,7 @@ torch_ucc_coll_comm_t* ProcessGroupUCC::get_coll_comm() {
     torch_ucc_status_t st_ucc;
     torch_ucc_coll_config_t cfg;
 
-    cfg.blocking_wait = config.blocking_wait;
+    memcpy(cfg.blocking_wait, config.blocking_wait, sizeof(cfg.blocking_wait));
     cfg.high_priority_stream = config.high_priority_stream;
     st_ucc = coll_ops.coll_comm_init(ucx_comm, &cfg, &coll_comm);
     if (st_ucc != TORCH_UCC_OK) {
@@ -250,7 +274,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::enqueue_request(
       c10::make_intrusive<ProcessGroupUCC::WorkColl>(coll_ops, progress_list));
   (*iter)->work_list_entry = iter;
   (*iter)->coll_req = req;
-  (*iter)->blocking_wait = config.blocking_wait;
+  (*iter)->blocking_wait = config.blocking_wait[req->coll_type];
   (*iter)->external_progress = config.enable_progress_thread;
   (*iter)->scratch = (char*)scratch;
   auto workreq = (*iter);

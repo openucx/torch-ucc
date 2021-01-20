@@ -24,8 +24,18 @@ enum torch_ucc_status_t {
   TORCH_UCC_ERROR = -1,
 };
 
+typedef enum {
+  TORCH_UCC_BARRIER = 0,
+  TORCH_UCC_BCAST,
+  TORCH_UCC_ALLREDUCE,
+  TORCH_UCC_ALLTOALL,
+  TORCH_UCC_ALLTOALLV,
+  TORCH_UCC_ALLGATHER,
+  TORCH_UCC_COLL_LAST,
+} torch_ucc_collective_type_t;
+
 struct torch_ucc_coll_config_t {
-  bool blocking_wait;
+  bool blocking_wait[TORCH_UCC_COLL_LAST];
   bool high_priority_stream;
 };
 
@@ -43,6 +53,7 @@ struct torch_ucc_coll_request_t {
   c10::Device device;
   std::vector<at::Tensor> src;
   std::vector<at::Tensor> dst;
+  torch_ucc_collective_type_t coll_type;
 #ifdef USE_CUDA
   std::unique_ptr<at::cuda::CUDAEvent> tnsr_ready;
   std::unique_ptr<at::cuda::CUDAEvent> coll_finished;
@@ -118,10 +129,12 @@ extern torch_ucc_coll_ops_t xccl_coll_ops;
 
 inline void torch_ucc_coll_request_init(
     torch_ucc_coll_comm_t* coll_comm,
+    torch_ucc_collective_type_t coll_type,
     torch_ucc_coll_request_t* request,
     std::vector<at::Tensor>* srcPtr,
     std::vector<at::Tensor>* dstPtr) {
   request->coll_comm = coll_comm;
+  request->coll_type = coll_type;
   if (srcPtr) {
     request->src = *srcPtr;
     request->device = request->src[0].device();

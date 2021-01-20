@@ -186,7 +186,7 @@ class ProcessGroupUCC : public ProcessGroup {
  private:
   struct ucc_config {
     bool enable_progress_thread;
-    bool blocking_wait;
+    bool blocking_wait[TORCH_UCC_COLL_LAST];
     bool high_priority_stream;
   } config{};
 

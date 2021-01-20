@@ -23,7 +23,6 @@ struct torch_xccl_comm_t {
 struct torch_xccl_request_t {
   torch_ucc_coll_request_t super;
   xccl_coll_req_h request{};
-  xccl_collective_type_t coll_type;
   torch_ucc_status_t status;
   at::Tensor flat_tensor;
 #ifdef USE_CUDA
