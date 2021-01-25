@@ -31,7 +31,7 @@ static xccl_status_t oob_allgather_test(void* req) {
       static_cast<torch_ucx_comm_t*>(oob_req->oob_coll_ctx);
   char *tmpsend = nullptr, *tmprecv = nullptr;
   size_t msglen = oob_req->msglen;
-  torch_ucx_status_t st;
+  torch_ucc_status_t st;
 
   if (oob_req->done) {
     return XCCL_OK;
@@ -64,7 +64,7 @@ static xccl_status_t oob_allgather_test(void* req) {
           nullptr,
           1,
           oob_req->num_active_reqs);
-      if (st == TORCH_UCX_INPROGRESS) {
+      if (st == TORCH_UCC_INPROGRESS) {
         return XCCL_INPROGRESS;
       }
       oob_req->num_active_reqs = 0;
@@ -103,7 +103,7 @@ static xccl_status_t oob_allgather_test(void* req) {
       nullptr,
       1,
       oob_req->num_active_reqs);
-  if (st == TORCH_UCX_INPROGRESS) {
+  if (st == TORCH_UCC_INPROGRESS) {
     return XCCL_INPROGRESS;
   }
 
@@ -396,7 +396,7 @@ static torch_ucc_status_t xccl_init_and_post(xccl_coll_op_args_t *args,
     /* Record event that later can be used for fence */
     if ((req->super.device.is_cuda()) &&
         (!req->super.coll_comm->config.blocking_wait[req->super.coll_type])) {
-        req->super.coll_finished->record(*req->super.coll_comm->stream);
+        req->super.event->record(*req->super.coll_comm->stream);
 
     }
 #endif
@@ -644,17 +644,15 @@ torch_ucc_status_t torch_xccl_progress(torch_ucc_coll_request_t* request) {
 
 torch_ucc_status_t torch_xccl_test(torch_ucc_coll_request_t* request) {
   torch_xccl_request_t* req = (torch_xccl_request_t*)request;
-
   return req->status;
 }
 
 torch_ucc_status_t torch_xccl_fence(torch_ucc_coll_request_t* request) {
 #ifdef USE_CUDA
   torch_xccl_request_t* req = (torch_xccl_request_t*)request;
-
   if (req->status == TORCH_UCC_INPROGRESS) {
-    auto current_stream = at::cuda::getCurrentCUDAStream(req->super.device.index());
-    req->super.coll_finished->block(current_stream);
+    auto stream = at::cuda::getCurrentCUDAStream(req->super.device.index());
+    req->super.event->block(stream);
   }
 #endif
   return TORCH_UCC_OK;

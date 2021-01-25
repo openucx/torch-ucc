@@ -48,8 +48,10 @@ class ProcessGroupUCC : public ProcessGroup {
    public:
     WorkColl(
         torch_ucc_coll_ops_t ops,
-        std::list<c10::intrusive_ptr<WorkColl>>& list)
-        : coll_ops(ops),
+        std::list<c10::intrusive_ptr<WorkColl>>& list,
+        int rank, OpType op, const char* prof_title)
+        : ProcessGroup::Work(rank, op, prof_title),
+          coll_ops(ops),
           work_list(list),
           external_progress(false),
           blocking_wait(false),
@@ -182,10 +184,12 @@ class ProcessGroupUCC : public ProcessGroup {
       torch_ucc_coll_request_t* req,
       void* scratch);
   torch_ucc_coll_comm_t* get_coll_comm();
-
+  torch_ucx_comm_t* get_p2p_comm();
+  void start_progress_thread();
  private:
   struct ucc_config {
     bool enable_progress_thread;
+    bool enable_profiling;
     bool blocking_wait[TORCH_UCC_COLL_LAST];
     bool high_priority_stream;
   } config{};

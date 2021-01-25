@@ -15,7 +15,7 @@ static void torch_ucx_req_init(void* request) {
 
 static void torch_ucx_req_cleanup(void* request) {}
 
-torch_ucx_status_t torch_ucx_comm_init(
+torch_ucc_status_t torch_ucx_comm_init(
     torch_ucx_comm_t** ucx_comm,
     int size,
     int rank,
@@ -115,7 +115,7 @@ torch_ucx_status_t torch_ucx_comm_init(
   }
 
   *ucx_comm = comm;
-  return TORCH_UCX_OK;
+  return TORCH_UCC_OK;
 
 close_ep:
   delete[] comm->eps;
@@ -126,7 +126,7 @@ close_ctx:
 free_comm:
   delete comm;
   *ucx_comm = nullptr;
-  return TORCH_UCX_ERROR;
+  return TORCH_UCC_ERROR;
 }
 
 void torch_ucx_comm_close(

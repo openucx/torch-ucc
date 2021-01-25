@@ -78,10 +78,11 @@ namespace c10d {
     (_ucp_tag_mask) = (uint64_t)-1;                                \
   } while (0)
 
-enum torch_ucx_status_t {
-  TORCH_UCX_OK = 0,
-  TORCH_UCX_INPROGRESS = 1,
-  TORCH_UCX_ERROR = -1,
+enum torch_ucc_status_t {
+  TORCH_UCC_OK = 0,
+  TORCH_UCC_INPROGRESS = 1,
+  TORCH_UCC_OPERATION_INITIALIZED = 2,
+  TORCH_UCC_ERROR = -1,
 };
 
 enum torch_ucx_tag_type_t {
@@ -111,14 +112,14 @@ static inline void torch_ucx_request_free(torch_ucx_request_t* request) {
   ucp_request_free(request);
 }
 
-static inline torch_ucx_status_t torch_ucx_check_req(ucs_status_ptr_t st) {
+static inline torch_ucc_status_t torch_ucx_check_req(ucs_status_ptr_t st) {
   if (UCS_PTR_IS_ERR(st)) {
     fprintf(
         stderr, "ProcessGroupUCC: %s\n", ucs_status_string(UCS_PTR_STATUS(st)));
-    return TORCH_UCX_ERROR;
+    return TORCH_UCC_ERROR;
   }
 
-  return TORCH_UCX_OK;
+  return TORCH_UCC_OK;
 }
 
 void torch_ucx_send_cmpl_cb(
@@ -132,7 +133,7 @@ void torch_ucx_recv_cmpl_cb(
     const ucp_tag_recv_info_t* info,
     void* user_data);
 
-torch_ucx_status_t torch_ucx_comm_init(
+torch_ucc_status_t torch_ucx_comm_init(
     torch_ucx_comm_t** comm,
     int size,
     int rank,
@@ -141,7 +142,7 @@ void torch_ucx_comm_close(
     torch_ucx_comm_t* comm,
     const c10::intrusive_ptr<Store>& store);
 
-static inline torch_ucx_status_t torch_ucx_send_nb(
+static inline torch_ucc_status_t torch_ucx_send_nb(
     torch_ucx_comm_t* comm,
     void* data,
     ucs_memory_type_t mtype,
@@ -162,7 +163,7 @@ static inline torch_ucx_status_t torch_ucx_send_nb(
       TORCH_UCX_MAKE_OOB_SEND_TAG(ucp_tag, tag, comm->rank, 0);
       break;
     default:
-      return TORCH_UCX_ERROR;
+      return TORCH_UCC_ERROR;
   };
   // fprintf(stderr, "rank %d send tag %" PRIu64 "(%d) shift %d\n", comm->rank,
   // ucp_tag, tag, TORCH_UCX_OOB_TAG_BITS_OFFSET);
@@ -173,15 +174,15 @@ static inline torch_ucx_status_t torch_ucx_send_nb(
   params.memory_type = mtype;
   params.cb.send = torch_ucx_send_cmpl_cb;
   st = ucp_tag_send_nbx(comm->eps[dst_rank], data, 1, ucp_tag, &params);
-  if (torch_ucx_check_req(st) != TORCH_UCX_OK) {
-    return TORCH_UCX_ERROR;
+  if (torch_ucx_check_req(st) != TORCH_UCC_OK) {
+    return TORCH_UCC_ERROR;
   };
   *req = reinterpret_cast<torch_ucx_request_t*>(st);
 
-  return TORCH_UCX_OK;
+  return TORCH_UCC_OK;
 }
 
-static inline torch_ucx_status_t torch_ucx_recv_nb(
+static inline torch_ucc_status_t torch_ucx_recv_nb(
     torch_ucx_comm_t* comm,
     void* data,
     ucs_memory_type_t mtype,
@@ -202,7 +203,7 @@ static inline torch_ucx_status_t torch_ucx_recv_nb(
       TORCH_UCX_MAKE_OOB_RECV_TAG(ucp_tag, ucp_tag_mask, tag, src_rank, 0);
       break;
     default:
-      return TORCH_UCX_ERROR;
+      return TORCH_UCC_ERROR;
   };
 
   // fprintf(stderr, "rank %d recv tag %" PRIu64 " (%d) mask %" PRIu64 "\n",
@@ -213,20 +214,20 @@ static inline torch_ucx_status_t torch_ucx_recv_nb(
   params.cb.recv = torch_ucx_recv_cmpl_cb;
   params.memory_type = mtype;
   st = ucp_tag_recv_nbx(comm->worker, data, 1, ucp_tag, ucp_tag_mask, &params);
-  if (torch_ucx_check_req(st) != TORCH_UCX_OK) {
-    return TORCH_UCX_ERROR;
+  if (torch_ucx_check_req(st) != TORCH_UCC_OK) {
+    return TORCH_UCC_ERROR;
   };
   *req = reinterpret_cast<torch_ucx_request_t*>(st);
   /*TODO: check request*/
 
-  return TORCH_UCX_OK;
+  return TORCH_UCC_OK;
 }
 
 static inline unsigned torch_ucx_comm_progress(torch_ucx_comm_t* comm) {
   return ucp_worker_progress(comm->worker);
 }
 
-static inline torch_ucx_status_t torch_ucx_req_test(
+static inline torch_ucc_status_t torch_ucx_req_test(
     torch_ucx_comm_t* comm,
     torch_ucx_request_t** reqs,
     int n_reqs,
@@ -237,7 +238,7 @@ static inline torch_ucx_status_t torch_ucx_req_test(
   int n_completed;
 
   if (n_completions_required == 0) {
-    return TORCH_UCX_OK;
+    return TORCH_UCC_OK;
   }
 
   while (poll_count < 0 || n_polls++ < poll_count) {
@@ -261,11 +262,11 @@ static inline torch_ucx_status_t torch_ucx_req_test(
         }
       }
       if (n_completed == n_completions_required) {
-        return TORCH_UCX_OK;
+        return TORCH_UCC_OK;
       }
     }
   }
-  return TORCH_UCX_INPROGRESS;
+  return TORCH_UCC_INPROGRESS;
 }
 
 } // namespace c10d

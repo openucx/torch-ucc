@@ -17,13 +17,6 @@
 #endif
 namespace c10d {
 
-enum torch_ucc_status_t {
-  TORCH_UCC_OK = 0,
-  TORCH_UCC_INPROGRESS = 1,
-  TORCH_UCC_OPERATION_INITIALIZED = 2,
-  TORCH_UCC_ERROR = -1,
-};
-
 typedef enum {
   TORCH_UCC_BARRIER = 0,
   TORCH_UCC_BCAST,
@@ -55,16 +48,14 @@ struct torch_ucc_coll_request_t {
   std::vector<at::Tensor> dst;
   torch_ucc_collective_type_t coll_type;
 #ifdef USE_CUDA
-  std::unique_ptr<at::cuda::CUDAEvent> tnsr_ready;
-  std::unique_ptr<at::cuda::CUDAEvent> coll_finished;
+  std::unique_ptr<at::cuda::CUDAEvent> event;
 #endif
   torch_ucc_coll_request_t(): device(c10::DeviceType::CPU) {}
   ~torch_ucc_coll_request_t() {
 #ifdef USE_CUDA
     if (device.is_cuda()) {
       std::lock_guard<std::mutex> lock(coll_comm->event_pool_mutex);
-      coll_comm->event_pool.push(std::move(tnsr_ready));
-      coll_comm->event_pool.push(std::move(coll_finished));
+      coll_comm->event_pool.push(std::move(event));
     }
 #endif
   }
@@ -139,28 +130,29 @@ inline void torch_ucc_coll_request_init(
     request->src = *srcPtr;
     request->device = request->src[0].device();
 #ifdef USE_CUDA
-    request->tnsr_ready = nullptr;
-    request->coll_finished = nullptr;
+    request->event = nullptr;
     if (request->device.is_cuda()) {
-      std::lock_guard<std::mutex> lock(coll_comm->event_pool_mutex);
       if (coll_comm->stream == nullptr) {
         coll_comm->stream = std::make_unique<at::cuda::CUDAStream>(
             at::cuda::getStreamFromPool(coll_comm->config.high_priority_stream,
                                         request->device.index()));
       }
-      if (coll_comm->event_pool.empty()) {
-        request->tnsr_ready = std::make_unique<at::cuda::CUDAEvent>();
-        request->coll_finished = std::make_unique<at::cuda::CUDAEvent>();
-      } else {
-        request->tnsr_ready = std::move(coll_comm->event_pool.front());
-        coll_comm->event_pool.pop();
-        request->coll_finished = std::move(coll_comm->event_pool.front());
-        coll_comm->event_pool.pop();
+      {
+        std::lock_guard<std::mutex> lock(coll_comm->event_pool_mutex);
+        if (coll_comm->event_pool.empty()) {
+          request->event = std::make_unique<at::cuda::CUDAEvent>();
+        } else {
+          request->event = std::move(coll_comm->event_pool.front());
+          coll_comm->event_pool.pop();
+        }
       }
-      request->tnsr_ready->record(
+      request->event->record(
           at::cuda::getCurrentCUDAStream(request->device.index()));
-      request->tnsr_ready->block(*coll_comm->stream);
-
+      request->event->block(*coll_comm->stream);
+    }
+#else
+    if (request->device.is_cuda()) {
+      fprintf(stderr, "WARN: CUDA support wasn't enabled\n");
     }
 #endif
   }
