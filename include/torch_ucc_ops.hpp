@@ -29,6 +29,7 @@ typedef enum {
 
 struct torch_ucc_coll_config_t {
   bool blocking_wait[TORCH_UCC_COLL_LAST];
+  bool gpu_barrier;
   bool high_priority_stream;
 };
 
@@ -126,6 +127,14 @@ inline void torch_ucc_coll_request_init(
     std::vector<at::Tensor>* dstPtr) {
   request->coll_comm = coll_comm;
   request->coll_type = coll_type;
+  if ((coll_type == TORCH_UCC_BARRIER) &&
+      (coll_comm->config.gpu_barrier)) {
+      if (coll_comm->stream == nullptr) {
+        coll_comm->stream = std::make_unique<at::cuda::CUDAStream>(
+            at::cuda::getStreamFromPool(coll_comm->config.high_priority_stream,
+                                        request->device.index()));
+      }
+  }
   if (srcPtr) {
     request->src = *srcPtr;
     request->device = request->src[0].device();

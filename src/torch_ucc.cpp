@@ -165,6 +165,11 @@ void ProcessGroupUCC::read_config() {
   if (env) {
     config.enable_progress_thread = std::atoi(env);
   }
+  config.gpu_barrier = true;
+  env = std::getenv("TORCH_UCC_GPU_BARRIER");
+  if (env) {
+    config.gpu_barrier = std::atoi(env);
+  }
   config.enable_profiling = false;
   env = std::getenv("TORCH_UCC_PROFILING_ENABLE");
   if (env) {
@@ -240,6 +245,7 @@ torch_ucc_coll_comm_t* ProcessGroupUCC::get_coll_comm() {
     get_p2p_comm();
     memcpy(cfg.blocking_wait, config.blocking_wait, sizeof(cfg.blocking_wait));
     cfg.high_priority_stream = config.high_priority_stream;
+    cfg.gpu_barrier = config.gpu_barrier;
     st = coll_ops.coll_comm_init(ucx_comm, &cfg, &coll_comm);
     if (st != TORCH_UCC_OK) {
       throw std::runtime_error(

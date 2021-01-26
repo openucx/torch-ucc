@@ -192,6 +192,7 @@ class ProcessGroupUCC : public ProcessGroup {
     bool enable_profiling;
     bool blocking_wait[TORCH_UCC_COLL_LAST];
     bool high_priority_stream;
+    bool gpu_barrier;
   } config{};
 
   void read_config();

@@ -574,6 +574,14 @@ torch_ucc_status_t torch_xccl_barrier(
   coll_args.field_mask = 0;
   coll_args.coll_type = XCCL_BARRIER;
   coll_args.alg.set_by_user = 0;
+#ifdef USE_CUDA
+  if (xccl_comm->super.config.gpu_barrier) {
+    coll_req->stream = xccl_comm->super.stream->stream();
+    coll_args.field_mask |= XCCL_COLL_OP_ARGS_FIELD_STREAM;
+    coll_args.stream.type = XCCL_STREAM_TYPE_CUDA;
+    coll_args.stream.stream = (void*)(&coll_req->stream);
+  }
+#endif
   if (xccl_init_and_post(&coll_args, xccl_comm->xccl_team, coll_req) != TORCH_UCC_OK)
   {
     delete coll_req;
