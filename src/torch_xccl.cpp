@@ -236,6 +236,10 @@ torch_ucc_status_t torch_xccl_comm_init(
     } else {
       xccl_context_config_modify(&tl, ctx_cfg, "BLOCK_STREAM_ALLGATHER", "yes");
     }
+    if (coll_config->serialize) {
+      xccl_context_config_modify(&tl, ctx_cfg, "BLOCK_STREAM_ALLTOALLV", "yes");
+      xccl_context_config_modify(&tl, ctx_cfg, "BLOCK_STREAM_ALLTOALL", "yes");
+    }
   }
 
   xccl_context_params_t ctx_params;

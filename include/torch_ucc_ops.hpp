@@ -31,6 +31,7 @@ struct torch_ucc_coll_config_t {
   bool blocking_wait[TORCH_UCC_COLL_LAST];
   bool gpu_barrier;
   bool high_priority_stream;
+  bool serialize;
 };
 
 struct torch_ucc_coll_comm_t {

@@ -175,7 +175,11 @@ void ProcessGroupUCC::read_config() {
   if (env) {
     config.enable_profiling = std::atoi(env);
   }
-
+  config.serialize = false;
+  env = std::getenv("TORCH_UCC_SERIALIZE_COLL");
+  if (env) {
+    config.serialize = std::atoi(env);
+  }
   for (int i = 0; i < TORCH_UCC_COLL_LAST; i++) {
     config.blocking_wait[i] = true;
   }
@@ -246,6 +250,7 @@ torch_ucc_coll_comm_t* ProcessGroupUCC::get_coll_comm() {
     memcpy(cfg.blocking_wait, config.blocking_wait, sizeof(cfg.blocking_wait));
     cfg.high_priority_stream = config.high_priority_stream;
     cfg.gpu_barrier = config.gpu_barrier;
+    cfg.serialize = config.serialize;
     st = coll_ops.coll_comm_init(ucx_comm, &cfg, &coll_comm);
     if (st != TORCH_UCC_OK) {
       throw std::runtime_error(
