@@ -293,6 +293,8 @@ torch_ucc_status_t torch_xccl_comm_init(
   xccl_comm->super.stream = nullptr;
 #endif
   xccl_comm->super.config = *coll_config;
+  memcpy(xccl_comm->super.config.blocking_wait, coll_config->blocking_wait,
+         sizeof(bool)*TORCH_UCC_COLL_LAST);
   if (p2p_comm->rank == 0) {
     //TODO: add TLS configuration print
     LOG(INFO) << "ProcessGroupUCC initialized with following options:"
@@ -362,6 +364,17 @@ std::map<xccl_collective_type_t, const char*> xccl_collective_name = {
     {XCCL_ALLGATHER, "Allgather"},
 };
 
+const std::map<c10::DeviceType, ucs_memory_type_t> xccl_mtype_map = {
+    {c10::kCPU, UCS_MEMORY_TYPE_HOST},
+    {c10::kCUDA, UCS_MEMORY_TYPE_CUDA},
+    {c10::kHIP, UCS_MEMORY_TYPE_ROCM},
+    {c10::kFPGA, UCS_MEMORY_TYPE_UNKNOWN},
+    {c10::kMSNPU, UCS_MEMORY_TYPE_UNKNOWN},
+    {c10::kXLA, UCS_MEMORY_TYPE_UNKNOWN},
+    {c10::kVulkan, UCS_MEMORY_TYPE_UNKNOWN},
+    {c10::kMetal, UCS_MEMORY_TYPE_UNKNOWN},
+};
+
 static void coll_args_init_with_stream(xccl_coll_op_args_t *coll_args,
                                        torch_xccl_comm_t* xccl_comm,
                                        torch_xccl_request_t* coll_req) {
@@ -369,10 +382,9 @@ static void coll_args_init_with_stream(xccl_coll_op_args_t *coll_args,
   if (!coll_req->super.device.is_cuda()) {
     return;
   }
-  coll_req->stream = xccl_comm->super.stream->stream();
   coll_args->field_mask |= XCCL_COLL_OP_ARGS_FIELD_STREAM;
   coll_args->stream.type = XCCL_STREAM_TYPE_CUDA;
-  coll_args->stream.stream = (void*)(&coll_req->stream);
+  coll_args->stream.stream = xccl_comm->super.stream->stream();
 #endif
 }
 
@@ -401,7 +413,6 @@ static torch_ucc_status_t xccl_init_and_post(xccl_coll_op_args_t *args,
     if ((req->super.device.is_cuda()) &&
         (!req->super.coll_comm->config.blocking_wait[req->super.coll_type])) {
         req->super.event->record(*req->super.coll_comm->stream);
-
     }
 #endif
   return TORCH_UCC_OK;
@@ -431,7 +442,9 @@ torch_ucc_status_t torch_xccl_allgather(
   coll_args.field_mask = 0;
   coll_args.coll_type = XCCL_ALLGATHER;
   coll_args.buffer_info.src_buffer = input_tensors[0].data_ptr();
+  coll_args.buffer_info.src_mtype = xccl_mtype_map.at(input_tensors[0].device().type());
   coll_args.buffer_info.dst_buffer = coll_req->flat_tensor.data_ptr();
+  coll_args.buffer_info.dst_mtype = coll_args.buffer_info.src_mtype;
   coll_args.buffer_info.len = buf_len;
   coll_args.alg.set_by_user = 0;
   coll_args_init_with_stream(&coll_args, xccl_comm, coll_req);
@@ -468,7 +481,9 @@ torch_ucc_status_t torch_xccl_alltoall(
   coll_args.field_mask = 0;
   coll_args.coll_type = XCCL_ALLTOALL;
   coll_args.buffer_info.src_buffer = input_tensor.data_ptr();
+  coll_args.buffer_info.src_mtype = xccl_mtype_map.at(input_tensor.device().type());
   coll_args.buffer_info.dst_buffer = output_tensor.data_ptr();
+  coll_args.buffer_info.dst_mtype = xccl_mtype_map.at(output_tensor.device().type());
   coll_args.buffer_info.len = buf_len;
   coll_args.alg.set_by_user = 0;
   coll_args_init_with_stream(&coll_args, xccl_comm, coll_req);
@@ -510,11 +525,15 @@ torch_ucc_status_t torch_xccl_alltoallv(
   coll_args.buffer_info.src_counts = send_lengths;
   coll_args.buffer_info.src_datatype =
       xccl_type_map.at(input_tensor.scalar_type());
+  coll_args.buffer_info.src_mtype =
+      xccl_mtype_map.at(input_tensor.device().type());
   coll_args.buffer_info.dst_buffer = output_tensor.data_ptr();
   coll_args.buffer_info.dst_displacements = recv_offsets;
   coll_args.buffer_info.dst_counts = recv_lengths;
   coll_args.buffer_info.dst_datatype =
       xccl_type_map.at(output_tensor.scalar_type());
+  coll_args.buffer_info.dst_mtype =
+      xccl_mtype_map.at(output_tensor.device().type());
   coll_args.alg.set_by_user = 0;
   coll_args_init_with_stream(&coll_args, xccl_comm, coll_req);
   if (xccl_init_and_post(&coll_args, xccl_comm->xccl_team, coll_req) != TORCH_UCC_OK)
@@ -545,7 +564,9 @@ torch_ucc_status_t torch_xccl_allreduce(
   coll_args.field_mask = 0;
   coll_args.coll_type = XCCL_ALLREDUCE;
   coll_args.buffer_info.src_buffer = tensors[0].data_ptr();
+  coll_args.buffer_info.src_mtype = xccl_mtype_map.at(tensors[0].device().type());
   coll_args.buffer_info.dst_buffer = tensors[0].data_ptr();
+  coll_args.buffer_info.dst_mtype = coll_args.buffer_info.src_mtype;
   coll_args.buffer_info.len = tensors[0].numel() * tensors[0].element_size();
   coll_args.reduce_info.dt = xccl_type_map.at(tensors[0].scalar_type());
   coll_args.reduce_info.op = xccl_op_map.at(opts.reduceOp);
@@ -578,12 +599,14 @@ torch_ucc_status_t torch_xccl_barrier(
   coll_args.field_mask = 0;
   coll_args.coll_type = XCCL_BARRIER;
   coll_args.alg.set_by_user = 0;
+  coll_args.buffer_info.src_mtype = UCS_MEMORY_TYPE_HOST;
 #ifdef USE_CUDA
   if (xccl_comm->super.config.gpu_barrier) {
-    coll_req->stream = xccl_comm->super.stream->stream();
+    coll_args.buffer_info.src_mtype = UCS_MEMORY_TYPE_CUDA;
     coll_args.field_mask |= XCCL_COLL_OP_ARGS_FIELD_STREAM;
     coll_args.stream.type = XCCL_STREAM_TYPE_CUDA;
-    coll_args.stream.stream = (void*)(&coll_req->stream);
+    coll_args.stream.stream = xccl_comm->super.stream->stream();
+    coll_req->super.event->record(*xccl_comm->super.stream);
   }
 #endif
   if (xccl_init_and_post(&coll_args, xccl_comm->xccl_team, coll_req) != TORCH_UCC_OK)
@@ -614,7 +637,9 @@ torch_ucc_status_t torch_xccl_broadcast(
   coll_args.field_mask = 0;
   coll_args.coll_type = XCCL_BCAST;
   coll_args.buffer_info.src_buffer = tensors[0].data_ptr();
+  coll_args.buffer_info.src_mtype = xccl_mtype_map.at(tensors[0].device().type());
   coll_args.buffer_info.dst_buffer = tensors[0].data_ptr();
+  coll_args.buffer_info.dst_mtype = coll_args.buffer_info.src_mtype;
   coll_args.buffer_info.len = tensors[0].numel() * tensors[0].element_size();
   coll_args.root = root;
   coll_args.alg.set_by_user = 0;
@@ -636,7 +661,7 @@ torch_ucc_status_t torch_xccl_progress(torch_ucc_coll_request_t* request) {
   st = xccl_collective_test(req->request);
   if (st != XCCL_INPROGRESS) {
     if (st != XCCL_OK) {
-      fprintf(stderr, "TorchUCC: context progress failed (%d) \n", st);
+      fprintf(stderr, "TorchUCC: context progress failed (%d)\n", st);
       req->status = TORCH_UCC_ERROR;
       return TORCH_UCC_ERROR;
     }
@@ -650,7 +675,6 @@ torch_ucc_status_t torch_xccl_progress(torch_ucc_coll_request_t* request) {
     xccl_collective_finalize(req->request);
     req->status = TORCH_UCC_OK;
   }
-
   return TORCH_UCC_OK;
 }
 

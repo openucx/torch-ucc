@@ -25,9 +25,6 @@ struct torch_xccl_request_t {
   xccl_coll_req_h request{};
   torch_ucc_status_t status;
   at::Tensor flat_tensor;
-#ifdef USE_CUDA
-  cudaStream_t stream;
-#endif
 };
 
 torch_ucc_status_t torch_xccl_comm_init(

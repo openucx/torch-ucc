@@ -131,10 +131,9 @@ inline void torch_ucc_coll_request_init(
   if ((coll_type == TORCH_UCC_BARRIER) &&
       (coll_comm->config.gpu_barrier)) {
       if (coll_comm->stream == nullptr) {
-        coll_comm->stream = std::make_unique<at::cuda::CUDAStream>(
-            at::cuda::getStreamFromPool(coll_comm->config.high_priority_stream,
-                                        request->device.index()));
+        fprintf(stderr, "stream wasn't created, gpu barrier isn't supported\n");
       }
+      request->device = coll_comm->stream->device();
   }
   if (srcPtr) {
     request->src = *srcPtr;

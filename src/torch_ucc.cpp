@@ -165,7 +165,7 @@ void ProcessGroupUCC::read_config() {
   if (env) {
     config.enable_progress_thread = std::atoi(env);
   }
-  config.gpu_barrier = true;
+  config.gpu_barrier = false;
   env = std::getenv("TORCH_UCC_GPU_BARRIER");
   if (env) {
     config.gpu_barrier = std::atoi(env);
