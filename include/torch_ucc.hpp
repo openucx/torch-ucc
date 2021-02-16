@@ -23,15 +23,12 @@
 
 namespace c10d {
 
-class CommUCX;
-
-class CommUCC;
+class CommPG;
 
 class ProcessGroupUCC : public ProcessGroup {
  public:
   class WorkUCX : public ProcessGroup::Work {
     friend class ProcessGroupUCC;
-    friend class CommUCX;
 
    public:
     WorkUCX(torch_ucx_request_t* request) : request_(request) {}
@@ -151,38 +148,20 @@ class ProcessGroupUCC : public ProcessGroup {
 
  protected:
   c10::intrusive_ptr<Store> store_;
-  std::shared_ptr<CommUCX> ucx_comm_;
-  std::shared_ptr<CommUCC> ucc_comm_;
-  uint32_t ucx_tag;
+  std::shared_ptr<CommPG> comm;
+  uint32_t comm_id;
   std::vector<ucp_ep_h> eps;
   ucc_team_h team;
 };
 
 class CommUCX {
- protected:
+ public:
   ucp_context_h context;
   ucp_worker_h worker;
-  std::mutex mutex;
-  std::thread progress_thread;
-  std::condition_variable queue_produce_cv;
-  std::condition_variable queue_consume_cv;
-  std::list<c10::intrusive_ptr<ProcessGroupUCC::WorkUCX>> progress_list;
-  bool stop_progress_loop;
-  void progress_loop();
 
  public:
   CommUCX();
   ~CommUCX();
-  void connect_eps(
-      std::vector<ucp_ep_h>& eps,
-      int rank,
-      int size,
-      const c10::intrusive_ptr<Store>& store);
-  void disconnect_eps(
-      std::vector<ucp_ep_h>& eps,
-      const c10::intrusive_ptr<Store>& store);
-  c10::intrusive_ptr<ProcessGroup::Work> enqueue_request(
-      torch_ucx_request_t* request);
   torch_ucx_request_t* send_nb(
       ucp_ep_h ep,
       void* data,
@@ -198,36 +177,113 @@ class CommUCX {
 };
 
 class CommUCC {
- protected:
+ public:
   ucc_lib_h lib;
   ucc_context_h context;
-  std::mutex mutex;
-  std::thread progress_thread;
-  std::condition_variable queue_produce_cv;
-  std::condition_variable queue_consume_cv;
-  std::list<c10::intrusive_ptr<ProcessGroupUCC::WorkUCC>> progress_list;
-  bool stop_progress_loop;
-  void progress_loop();
-
  public:
   CommUCC();
   ~CommUCC();
-  void create_team(
-      ucc_team_h &team,
-      int rank,
-      int size,
-      const c10::intrusive_ptr<Store>& store);
-  void destroy_team(
-      ucc_team_h &team);
-  c10::intrusive_ptr<ProcessGroup::Work> enqueue_request(
-      ucc_coll_req_h request);
 };
 
 class CommPG {
   CommUCX ucx_comm;
   CommUCC ucc_comm;
 
-}
+  std::mutex mutex;
+  std::thread progress_thread;
+  std::condition_variable queue_produce_cv;
+  std::condition_variable queue_consume_cv;
+  std::list<c10::intrusive_ptr<ProcessGroup::Work>> progress_list;
+  bool stop_progress_loop;
+
+ public:
+  CommPG() {
+    stop_progress_loop = false;
+    progress_thread = std::thread(&CommPG::progress_loop, this);
+  }
+  ~CommPG() {
+    std::unique_lock<std::mutex> lock(mutex);
+    queue_consume_cv.wait(lock, [&] { return progress_list.empty(); });
+    stop_progress_loop = true;
+    lock.unlock();
+    queue_produce_cv.notify_all();
+    progress_thread.join();
+  }
+  void ucx_connect_eps(
+      std::vector<ucp_ep_h>& eps,
+      int rank,
+      int size,
+      const c10::intrusive_ptr<Store>& store);
+
+  void ucx_disconnect_eps(
+      std::vector<ucp_ep_h>& eps,
+      const c10::intrusive_ptr<Store>& store);
+
+  void ucc_create_team(
+      ucc_team_h &team,
+      int rank,
+      int size,
+      const c10::intrusive_ptr<Store>& store);
+  void ucc_destroy_team(
+      ucc_team_h &team);
+
+  void enqueue_request(const c10::intrusive_ptr<ProcessGroup::Work> &work) {
+    std::unique_lock<std::mutex> lock(mutex);
+    progress_list.push_back(work);
+    lock.unlock();
+    queue_produce_cv.notify_one();
+  }
+
+  static std::shared_ptr<CommPG> get_comm(uint32_t& id) {
+    static std::mutex m;
+    static std::weak_ptr<CommPG> comm;
+    static uint32_t comm_id;
+
+    std::lock_guard<std::mutex> lock(m);
+    id = (comm_id++ % TORCH_UCX_COMM_BITS);
+    std::shared_ptr<CommPG> shared_comm = comm.lock();
+    if (!shared_comm) {
+      shared_comm = std::make_shared<CommPG>();
+      comm = shared_comm;
+    }
+    return shared_comm;
+  }
+
+  void progress_loop() {
+    std::unique_lock<std::mutex> lock(mutex);
+    while (!stop_progress_loop) {
+    if (progress_list.empty()) {
+      queue_produce_cv.wait(lock);
+      continue;
+    }
+    auto work = progress_list.front();
+    progress_list.pop_front();
+    lock.unlock();
+    queue_consume_cv.notify_one();
+
+    do {
+      ucp_worker_progress(ucx_comm.worker);
+      ucc_context_progress(ucc_comm.context);
+
+    } while (!work->isCompleted());
+    lock.lock();
+  }
+
+
+    }
+  torch_ucx_request_t* send_nb(
+      ucp_ep_h ep,
+      void* data,
+      ucs_memory_type_t mtype,
+      size_t size,
+      ucp_tag_t ucp_tag);
+  torch_ucx_request_t* recv_nb(
+      void* data,
+      ucs_memory_type_t mtype,
+      size_t size,
+      ucp_tag_t ucp_tag,
+      ucp_tag_t ucp_tag_mask);
+};
 
 
 } // namespace c10d
