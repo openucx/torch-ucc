@@ -232,7 +232,8 @@ torch_ucx_request_t* CommPG::recv_nb(
     static_cast<torch_ucx_request_t*>(request)->status = TORCH_UCX_REQUEST_DONE;
   };
   params.memory_type = mtype;
-  st = ucp_tag_recv_nbx(ucx_comm.worker, data, 1, ucp_tag, ucp_tag_mask, &params);
+  st = ucp_tag_recv_nbx(
+      ucx_comm.worker, data, 1, ucp_tag, ucp_tag_mask, &params);
   if (torch_ucx_check_req(st) != TORCH_UCC_OK) {
     throw std::runtime_error("failed to recv message");
   };
@@ -263,7 +264,8 @@ CommUCC::CommUCC() {
   st = ucc_context_config_read(lib, NULL, &context_config);
   if (st != UCC_OK) {
     ucc_finalize(lib);
-    LOG(ERROR) << "failed to read UCC context config: " << ucc_status_string(st);
+    LOG(ERROR) << "failed to read UCC context config: "
+               << ucc_status_string(st);
     throw std::runtime_error(ucc_status_string(st));
   }
   memset(&context_params, 0, sizeof(ucc_context_params_t));
@@ -287,13 +289,17 @@ struct torch_ucc_oob_coll_info_t {
   const c10::intrusive_ptr<Store>* store;
   int rank;
   int size;
-  void *rbuf;
+  void* rbuf;
   size_t msglen;
 };
 
-static ucc_status_t oob_allgather(void* sbuf, void* rbuf, size_t msglen,
-                                  void* coll_info, void** req) {
-  torch_ucc_oob_coll_info_t *info =
+static ucc_status_t oob_allgather(
+    void* sbuf,
+    void* rbuf,
+    size_t msglen,
+    void* coll_info,
+    void** req) {
+  torch_ucc_oob_coll_info_t* info =
       reinterpret_cast<torch_ucc_oob_coll_info_t*>(coll_info);
   std::vector<uint8_t> val = std::vector<uint8_t>(
       reinterpret_cast<uint8_t*>(sbuf),
@@ -305,8 +311,8 @@ static ucc_status_t oob_allgather(void* sbuf, void* rbuf, size_t msglen,
   return UCC_OK;
 }
 
-static ucc_status_t oob_allgather_test(void *req) {
-  torch_ucc_oob_coll_info_t *info =
+static ucc_status_t oob_allgather_test(void* req) {
+  torch_ucc_oob_coll_info_t* info =
       reinterpret_cast<torch_ucc_oob_coll_info_t*>(req);
 
   for (int r = 0; r < info->size; r++) {
@@ -315,7 +321,8 @@ static ucc_status_t oob_allgather_test(void *req) {
     }
   }
   for (int r = 0; r < info->size; r++) {
-    std::vector<uint8_t> data = (*info->store)->get("teamr" + std::to_string(r));
+    std::vector<uint8_t> data =
+        (*info->store)->get("teamr" + std::to_string(r));
     memcpy(
         (void*)((ptrdiff_t)info->rbuf + info->msglen * r),
         data.data(),
@@ -324,14 +331,14 @@ static ucc_status_t oob_allgather_test(void *req) {
   return UCC_OK;
 }
 
-static ucc_status_t oob_allgather_free(void *req) {
-  torch_ucc_oob_coll_info_t *info =
+static ucc_status_t oob_allgather_free(void* req) {
+  torch_ucc_oob_coll_info_t* info =
       reinterpret_cast<torch_ucc_oob_coll_info_t*>(req);
   int num_done = (*info->store)->add({"team_ag_done"}, 1);
   if (num_done == info->size) {
     (*info->store)->deleteKey("team_ag_done");
     for (int r = 0; r < info->size; r++) {
-      if (r != info->rank){
+      if (r != info->rank) {
         (*info->store)->add({"team_ag_finished" + std::to_string(r)}, 1);
       }
     }
@@ -345,13 +352,13 @@ static ucc_status_t oob_allgather_free(void *req) {
 }
 
 void CommPG::ucc_create_team(
-      ucc_team_h &team,
-      int rank,
-      int size,
-      const c10::intrusive_ptr<Store>& store) {
+    ucc_team_h& team,
+    int rank,
+    int size,
+    const c10::intrusive_ptr<Store>& store) {
   ucc_status_t st;
   ucc_team_params_t team_params;
-  torch_ucc_oob_coll_info_t *coll_info = new torch_ucc_oob_coll_info_t;
+  torch_ucc_oob_coll_info_t* coll_info = new torch_ucc_oob_coll_info_t;
 
   coll_info->rank = rank;
   coll_info->size = size;
@@ -372,7 +379,7 @@ void CommPG::ucc_create_team(
     throw std::runtime_error(ucc_status_string(st));
   }
   do {
-      st = ucc_team_create_test(team);
+    st = ucc_team_create_test(team);
   } while (st == UCC_INPROGRESS);
   if (st != UCC_OK) {
     delete coll_info;
@@ -382,8 +389,7 @@ void CommPG::ucc_create_team(
   delete coll_info;
 }
 
-void CommPG::ucc_destroy_team(
-    ucc_team_h &team) {
+void CommPG::ucc_destroy_team(ucc_team_h& team) {
   ucc_team_destroy(team);
 }
 

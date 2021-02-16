@@ -17,8 +17,8 @@
 #include <c10d/Store.hpp>
 #include <c10d/Types.hpp>
 #include <c10d/Utils.hpp>
-#include <ucp/api/ucp.h>
 #include <ucc/api/ucc.h>
+#include <ucp/api/ucp.h>
 #include "torch_ucc_sendrecv.hpp"
 
 namespace c10d {
@@ -180,6 +180,7 @@ class CommUCC {
  public:
   ucc_lib_h lib;
   ucc_context_h context;
+
  public:
   CommUCC();
   ~CommUCC();
@@ -220,14 +221,13 @@ class CommPG {
       const c10::intrusive_ptr<Store>& store);
 
   void ucc_create_team(
-      ucc_team_h &team,
+      ucc_team_h& team,
       int rank,
       int size,
       const c10::intrusive_ptr<Store>& store);
-  void ucc_destroy_team(
-      ucc_team_h &team);
+  void ucc_destroy_team(ucc_team_h& team);
 
-  void enqueue_request(const c10::intrusive_ptr<ProcessGroup::Work> &work) {
+  void enqueue_request(const c10::intrusive_ptr<ProcessGroup::Work>& work) {
     std::unique_lock<std::mutex> lock(mutex);
     progress_list.push_back(work);
     lock.unlock();
@@ -252,25 +252,22 @@ class CommPG {
   void progress_loop() {
     std::unique_lock<std::mutex> lock(mutex);
     while (!stop_progress_loop) {
-    if (progress_list.empty()) {
-      queue_produce_cv.wait(lock);
-      continue;
+      if (progress_list.empty()) {
+        queue_produce_cv.wait(lock);
+        continue;
+      }
+      auto work = progress_list.front();
+      progress_list.pop_front();
+      lock.unlock();
+      queue_consume_cv.notify_one();
+
+      do {
+        ucp_worker_progress(ucx_comm.worker);
+        ucc_context_progress(ucc_comm.context);
+      } while (!work->isCompleted());
+      lock.lock();
     }
-    auto work = progress_list.front();
-    progress_list.pop_front();
-    lock.unlock();
-    queue_consume_cv.notify_one();
-
-    do {
-      ucp_worker_progress(ucx_comm.worker);
-      ucc_context_progress(ucc_comm.context);
-
-    } while (!work->isCompleted());
-    lock.lock();
   }
-
-
-    }
   torch_ucx_request_t* send_nb(
       ucp_ep_h ep,
       void* data,
@@ -284,6 +281,5 @@ class CommPG {
       ucp_tag_t ucp_tag,
       ucp_tag_t ucp_tag_mask);
 };
-
 
 } // namespace c10d
