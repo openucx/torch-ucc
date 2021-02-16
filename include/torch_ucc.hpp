@@ -1,18 +1,14 @@
 /**
- * * Copyright (C) Mellanox Technologies Ltd. 2001-2020.  ALL RIGHTS RESERVED.
- * *
- * * See file LICENSE for terms.
- * */
+ * Copyright (C) Mellanox Technologies Ltd. 2020-2021.  ALL RIGHTS RESERVED.
+ * See file LICENSE for terms.
+ */
 
 #pragma once
 
 #include <torch/python.h>
 
-#include <deque>
 #include <exception>
 #include <memory>
-#include <mutex>
-#include <thread>
 #include <vector>
 
 #include <pybind11/chrono.h>
@@ -21,59 +17,45 @@
 #include <c10d/Store.hpp>
 #include <c10d/Types.hpp>
 #include <c10d/Utils.hpp>
-
-#include <torch_ucc_ops.hpp>
-#include <torch_ucc_sendrecv.hpp>
+#include <ucp/api/ucp.h>
+#include <ucc/api/ucc.h>
+#include "torch_ucc_sendrecv.hpp"
 
 namespace c10d {
+
+class CommUCX;
+
+class CommUCC;
 
 class ProcessGroupUCC : public ProcessGroup {
  public:
   class WorkUCX : public ProcessGroup::Work {
+    friend class ProcessGroupUCC;
+    friend class CommUCX;
+
    public:
-    WorkUCX(torch_ucx_request_t* request, torch_ucx_comm_t* ucx_comm)
-        : req(request), comm(ucx_comm) {}
+    WorkUCX(torch_ucx_request_t* request) : request_(request) {}
     ~WorkUCX() override;
     bool isCompleted() override;
     bool isSuccess() const override;
     bool wait(std::chrono::milliseconds timeout = kUnsetTimeout) override;
 
    protected:
-    torch_ucx_request_t* req;
-    torch_ucx_comm_t* comm;
-    friend class ProcessGroupUCC;
+    torch_ucx_request_t* request_;
   };
+  class WorkUCC : public ProcessGroup::Work {
+    friend class ProcessGroupUCC;
+    friend class CommUCC;
 
-  class WorkColl : public ProcessGroup::Work {
    public:
-    WorkColl(
-        torch_ucc_coll_ops_t ops,
-        std::list<c10::intrusive_ptr<WorkColl>>& list,
-        int rank, OpType op, const char* prof_title)
-        : ProcessGroup::Work(rank, op, prof_title),
-          coll_ops(ops),
-          work_list(list),
-          external_progress(false),
-          blocking_wait(false),
-          scratch(nullptr) {}
-
-    ~WorkColl() override;
+    WorkUCC(ucc_coll_req_h request) : request_(request) {}
+    ~WorkUCC() override;
     bool isCompleted() override;
     bool isSuccess() const override;
     bool wait(std::chrono::milliseconds timeout = kUnsetTimeout) override;
 
    protected:
-    torch_ucc_coll_ops_t coll_ops;
-    std::list<c10::intrusive_ptr<WorkColl>>& work_list;
-    std::list<c10::intrusive_ptr<WorkColl>>::iterator work_list_entry;
-    bool external_progress;
-    bool blocking_wait;
-    char* scratch;
-    std::vector<at::Tensor> src;
-    std::vector<at::Tensor> dst;
-    torch_ucc_coll_request_t* coll_req{};
-
-    friend class ProcessGroupUCC;
+    ucc_coll_req_h request_;
   };
 
   explicit ProcessGroupUCC(
@@ -169,35 +151,83 @@ class ProcessGroupUCC : public ProcessGroup {
 
  protected:
   c10::intrusive_ptr<Store> store_;
-  torch_ucx_comm_t* ucx_comm{};
-  torch_ucc_coll_comm_t* coll_comm;
-  torch_ucc_coll_ops_t coll_ops{};
-  std::mutex pg_mutex;
+  std::shared_ptr<CommUCX> ucx_comm_;
+  std::shared_ptr<CommUCC> ucc_comm_;
+  uint32_t ucx_tag;
+  std::vector<ucp_ep_h> eps;
+  ucc_team_h team;
+};
+
+class CommUCX {
+ protected:
+  ucp_context_h context;
+  ucp_worker_h worker;
+  std::mutex mutex;
   std::thread progress_thread;
-  bool stop_progress_loop;
-  std::list<c10::intrusive_ptr<WorkColl>> progress_list;
   std::condition_variable queue_produce_cv;
   std::condition_variable queue_consume_cv;
+  std::list<c10::intrusive_ptr<ProcessGroupUCC::WorkUCX>> progress_list;
+  bool stop_progress_loop;
+  void progress_loop();
 
-  void progress_loop(c10::DeviceIndex default_dev_idx);
+ public:
+  CommUCX();
+  ~CommUCX();
+  void connect_eps(
+      std::vector<ucp_ep_h>& eps,
+      int rank,
+      int size,
+      const c10::intrusive_ptr<Store>& store);
+  void disconnect_eps(
+      std::vector<ucp_ep_h>& eps,
+      const c10::intrusive_ptr<Store>& store);
   c10::intrusive_ptr<ProcessGroup::Work> enqueue_request(
-      torch_ucc_coll_request_t* req,
-      void* scratch);
-  torch_ucc_coll_comm_t* get_coll_comm();
-  torch_ucx_comm_t* get_p2p_comm();
-  void start_progress_thread();
- private:
-  struct ucc_config {
-    bool enable_progress_thread;
-    bool enable_profiling;
-    bool blocking_wait[TORCH_UCC_COLL_LAST];
-    bool high_priority_stream;
-    bool serialize;
-    bool gpu_barrier;
-  } config{};
-
-  void read_config();
-  void check_tensor(const std::vector<at::Tensor>& tensors);
+      torch_ucx_request_t* request);
+  torch_ucx_request_t* send_nb(
+      ucp_ep_h ep,
+      void* data,
+      ucs_memory_type_t mtype,
+      size_t size,
+      ucp_tag_t ucp_tag);
+  torch_ucx_request_t* recv_nb(
+      void* data,
+      ucs_memory_type_t mtype,
+      size_t size,
+      ucp_tag_t ucp_tag,
+      ucp_tag_t ucp_tag_mask);
 };
+
+class CommUCC {
+ protected:
+  ucc_lib_h lib;
+  ucc_context_h context;
+  std::mutex mutex;
+  std::thread progress_thread;
+  std::condition_variable queue_produce_cv;
+  std::condition_variable queue_consume_cv;
+  std::list<c10::intrusive_ptr<ProcessGroupUCC::WorkUCC>> progress_list;
+  bool stop_progress_loop;
+  void progress_loop();
+
+ public:
+  CommUCC();
+  ~CommUCC();
+  void create_team(
+      ucc_team_h &team,
+      int rank,
+      int size,
+      const c10::intrusive_ptr<Store>& store);
+  void destroy_team(
+      ucc_team_h &team);
+  c10::intrusive_ptr<ProcessGroup::Work> enqueue_request(
+      ucc_coll_req_h request);
+};
+
+class CommPG {
+  CommUCX ucx_comm;
+  CommUCC ucc_comm;
+
+}
+
 
 } // namespace c10d

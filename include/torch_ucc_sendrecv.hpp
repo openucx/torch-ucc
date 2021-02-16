@@ -1,5 +1,5 @@
 /**
- * * Copyright (C) Mellanox Technologies Ltd. 2001-2020.  ALL RIGHTS RESERVED.
+ * * Copyright (C) Mellanox Technologies Ltd. 2020-2021.  ALL RIGHTS RESERVED.
  * *
  * * See file LICENSE for terms.
  * */
@@ -93,6 +93,7 @@ enum torch_ucx_tag_type_t {
 enum torch_ucx_request_status_t {
   TORCH_UCX_REQUEST_ACTIVE,
   TORCH_UCX_REQUEST_DONE,
+  TORCH_UCX_REQUEST_ERROR
 };
 
 struct torch_ucx_request_t {
