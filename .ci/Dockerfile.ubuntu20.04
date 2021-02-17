@@ -1,0 +1,58 @@
+FROM nvidia/cuda:11.2.1-devel-ubuntu20.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt update && \
+    apt install -y \
+        apt-utils \
+        autoconf \
+        build-essential \
+        cmake \
+        curl \
+        git \
+        ibverbs-providers \
+        ibverbs-utils \
+        libnuma-dev \
+        libtool-bin \
+        vim \
+    && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install conda
+RUN curl -LO http://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh && \
+    bash Miniconda3-latest-Linux-x86_64.sh -p /opt/conda -b && \
+    rm -f Miniconda3-latest-Linux-x86_64.sh
+ENV PATH /opt/conda/bin:${PATH}
+
+# Install conda python
+RUN conda update -y conda && \
+    conda install -c anaconda -y \
+        python \
+        pip && \
+    pip install --no-cache-dir python-hostlist
+
+RUN ln -s /opt/conda/bin/python /usr/bin/python
+
+WORKDIR "/workspace"
+
+# Install PyTorch
+RUN git clone https://github.com/pytorch/pytorch.git && \
+    cd pytorch && \
+    git submodule sync --recursive && \
+    git submodule update --init --recursive && \
+    pip install -r requirements.txt && \
+    TORCH_CUDA_ARCH_LIST="7.0 8.0+PTX" \
+    USE_GLOO=1 \
+    USE_DISTRIBUTED=1 \
+    USE_OPENCV=0 \
+    USE_CUDA=1 \
+    USE_NCCL=0 \
+    USE_MKLDNN=0 \
+    BUILD_TEST=0 \
+    USE_FBGEMM=0 \
+    USE_NNPACK=0 \
+    USE_QNNPACK=0 \
+    USE_XNNPACK=0 \
+    USE_KINETO=1 \
+    python setup.py install && \
+    rm -rf /workspace/pytorch

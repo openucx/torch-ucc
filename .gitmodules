@@ -1,0 +1,9 @@
+[submodule "xccl"]
+    path = xccl
+    url = https://github.com/openucx/xccl.git
+[submodule "ucc"]
+    path = ucc
+    url = https://github.com/openucx/ucc.git
+[submodule "ucx"]
+    path = ucx
+    url = https://github.com/openucx/ucx.git
