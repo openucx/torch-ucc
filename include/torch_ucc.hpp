@@ -84,19 +84,15 @@ namespace c10d {
     (_ucp_tag_mask) = (uint64_t)-1;                                \
   } while (0)
 
-enum torch_ucx_tag_type_t {
-  TORCH_UCX_P2P_TAG,
-  TORCH_UCX_OOB_TAG
-};
-
+enum torch_ucx_tag_type_t { TORCH_UCX_P2P_TAG, TORCH_UCX_OOB_TAG };
 
 class CommPG;
 
 class CommBase {
-   public:
-    CommBase() {}
-    virtual void progress() = 0;
-    virtual ~CommBase() {}
+ public:
+  CommBase() {}
+  virtual void progress() = 0;
+  virtual ~CommBase() {}
 };
 
 class ProcessGroupUCC : public ProcessGroup {
@@ -106,9 +102,13 @@ class ProcessGroupUCC : public ProcessGroup {
     WorkData() {}
     virtual ~WorkData() {}
   };
-  class AlltoallWorkData: public WorkData {
+  class AlltoallWorkData : public WorkData {
    public:
-    AlltoallWorkData(int size): send_lengths(size), send_offsets(size), recv_lengths(size), recv_offsets(size) {}
+    AlltoallWorkData(int size)
+        : send_lengths(size),
+          send_offsets(size),
+          recv_lengths(size),
+          recv_offsets(size) {}
     std::vector<uint32_t> send_lengths;
     std::vector<uint32_t> send_offsets;
     std::vector<uint32_t> recv_lengths;
@@ -118,18 +118,28 @@ class ProcessGroupUCC : public ProcessGroup {
   class WorkUCC : public ProcessGroup::Work {
     friend class ProcessGroupUCC;
     friend class CommPG;
+
    public:
-    WorkUCC(OpType opType, ucc_status_t status, ucc_coll_req_h request, CommBase *comm) : ProcessGroup::Work(-1, opType), status_(status), request_(request), comm_(comm) {}
+    WorkUCC(
+        OpType opType,
+        ucc_status_t status,
+        ucc_coll_req_h request,
+        CommBase* comm)
+        : ProcessGroup::Work(-1, opType),
+          status_(status),
+          request_(request),
+          comm_(comm) {}
     ~WorkUCC();
     bool isCompleted() override;
     bool isSuccess() const override;
     bool wait(std::chrono::milliseconds timeout = kUnsetTimeout) override;
     void finalize();
     std::unique_ptr<WorkData> data;
+
    protected:
     ucc_status_t status_;
     ucc_coll_req_h request_;
-    CommBase *comm_;
+    CommBase* comm_;
   };
 
   explicit ProcessGroupUCC(
@@ -299,10 +309,12 @@ class CommPG {
       ucc_coll_req_h request) {
     if (request == nullptr) {
       // p2p2 request completed immediately don't save it to progress queue
-      return c10::make_intrusive<ProcessGroupUCC::WorkUCC>(opType, UCC_OK, request, &ucx_comm);
+      return c10::make_intrusive<ProcessGroupUCC::WorkUCC>(
+          opType, UCC_OK, request, &ucx_comm);
     }
     std::unique_lock<std::mutex> lock(mutex);
-    auto work = c10::make_intrusive<ProcessGroupUCC::WorkUCC>(opType, UCC_INPROGRESS, request, &ucx_comm);
+    auto work = c10::make_intrusive<ProcessGroupUCC::WorkUCC>(
+        opType, UCC_INPROGRESS, request, &ucx_comm);
     progress_queue.push_back(work);
     lock.unlock();
     queue_produce_cv.notify_one();
@@ -311,9 +323,9 @@ class CommPG {
 
   c10::intrusive_ptr<ProcessGroup::Work> enqueue_collective(
       OpType opType,
-      ucc_coll_args_t &coll,
+      ucc_coll_args_t& coll,
       std::unique_ptr<ProcessGroupUCC::WorkData> data,
-      ucc_team_h &team) {
+      ucc_team_h& team) {
     std::unique_lock<std::mutex> lock(mutex);
     ucc_coll_req_h request;
     ucc_status_t st;
@@ -327,7 +339,8 @@ class CommPG {
       LOG(ERROR) << "failed to post collective: " << ucc_status_string(st);
       throw std::runtime_error(ucc_status_string(st));
     }
-    auto work = c10::make_intrusive<ProcessGroupUCC::WorkUCC>(opType, UCC_INPROGRESS, request, &ucc_comm);
+    auto work = c10::make_intrusive<ProcessGroupUCC::WorkUCC>(
+        opType, UCC_INPROGRESS, request, &ucc_comm);
     work->data = std::move(data);
     progress_queue.push_back(work);
     lock.unlock();

@@ -209,7 +209,8 @@ ucc_coll_req_h CommPG::send_nb(
   };
   st = ucp_tag_send_nbx(ep, data, 1, ucp_tag, &params);
   if (UCS_PTR_IS_ERR(st)) {
-    LOG(ERROR) << "failed to send message: " << ucs_status_string(UCS_PTR_STATUS(st));
+    LOG(ERROR) << "failed to send message: "
+               << ucs_status_string(UCS_PTR_STATUS(st));
     throw std::runtime_error(ucs_status_string(UCS_PTR_STATUS(st)));
   }
   return reinterpret_cast<ucc_coll_req_h>(st);
@@ -236,7 +237,8 @@ ucc_coll_req_h CommPG::recv_nb(
   st = ucp_tag_recv_nbx(
       ucx_comm.worker, data, 1, ucp_tag, ucp_tag_mask, &params);
   if (UCS_PTR_IS_ERR(st)) {
-    LOG(ERROR) << "failed to recv message: " << ucs_status_string(UCS_PTR_STATUS(st));
+    LOG(ERROR) << "failed to recv message: "
+               << ucs_status_string(UCS_PTR_STATUS(st));
     throw std::runtime_error(ucs_status_string(UCS_PTR_STATUS(st)));
   }
   return reinterpret_cast<ucc_coll_req_h>(st);
@@ -489,28 +491,36 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::alltoall_base(
     std::vector<int64_t>& inputSplitSizes,
     const AllToAllOptions& /* unused */) {
   ucc_coll_args_t coll;
-  AlltoallWorkData *data;
+  AlltoallWorkData* data;
 
   if ((outputSplitSizes.size() == 0) && (inputSplitSizes.size() == 0)) {
     data = nullptr;
     TORCH_CHECK(
-      (outputTensor.size(0) % size_ == 0) && (inputTensor.size(0) % size_ == 0),
-      "Tensor's dim 0 does not divide equally across group size");
+        (outputTensor.size(0) % size_ == 0) &&
+            (inputTensor.size(0) % size_ == 0),
+        "Tensor's dim 0 does not divide equally across group size");
     coll.coll_type = UCC_COLL_TYPE_ALLTOALL;
     coll.src.info.buffer = inputTensor.data_ptr();
-    coll.src.info.count = inputTensor.element_size() * inputTensor.numel() / size_;
+    coll.src.info.count =
+        inputTensor.element_size() * inputTensor.numel() / size_;
     coll.src.info.datatype = UCC_DT_UINT8;
     coll.src.info.mem_type = ucc_mtype_map.at(inputTensor.device().type());
     coll.dst.info.buffer = outputTensor.data_ptr();
-    coll.dst.info.count = outputTensor.element_size() * outputTensor.numel() / size_;
+    coll.dst.info.count =
+        outputTensor.element_size() * outputTensor.numel() / size_;
     coll.dst.info.datatype = UCC_DT_UINT8;
     coll.dst.info.mem_type = ucc_mtype_map.at(outputTensor.device().type());
   } else {
-    AlltoallWorkData *data = new AlltoallWorkData(size_);
+    AlltoallWorkData* data = new AlltoallWorkData(size_);
     c10d::checkSplitSizes(inputSplitSizes, inputTensor, size_);
     c10d::checkSplitSizes(outputSplitSizes, outputTensor, size_);
-    computeLengthsAndOffsets(outputSplitSizes, outputTensor, &data->recv_lengths, &data->recv_offsets);
-    computeLengthsAndOffsets(inputSplitSizes, inputTensor, &data->send_lengths, &data->send_offsets);
+    computeLengthsAndOffsets(
+        outputSplitSizes,
+        outputTensor,
+        &data->recv_lengths,
+        &data->recv_offsets);
+    computeLengthsAndOffsets(
+        inputSplitSizes, inputTensor, &data->send_lengths, &data->send_offsets);
     coll.mask = 0;
     coll.coll_type = UCC_COLL_TYPE_ALLTOALLV;
     coll.src.info_v.buffer = inputTensor.data_ptr();
@@ -520,11 +530,13 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::alltoall_base(
     coll.src.info_v.mem_type = ucc_mtype_map.at(inputTensor.device().type());
     coll.dst.info_v.buffer = outputTensor.data_ptr();
     coll.dst.info_v.counts = (ucc_count_t*)data->recv_lengths.data();
-    coll.dst.info_v.displacements = (ucc_aint_t*)data->recv_offsets.data();;
+    coll.dst.info_v.displacements = (ucc_aint_t*)data->recv_offsets.data();
+    ;
     coll.dst.info_v.datatype = ucc_type_map.at(outputTensor.scalar_type());
     coll.dst.info_v.mem_type = ucc_mtype_map.at(outputTensor.device().type());
   }
-  auto r = comm->enqueue_collective(OpType::ALLTOALL_BASE, coll, std::unique_ptr<WorkData>(data), team);
+  auto r = comm->enqueue_collective(
+      OpType::ALLTOALL_BASE, coll, std::unique_ptr<WorkData>(data), team);
   TORCH_CHECK(r.defined(), "wrong request");
   return r;
 }
