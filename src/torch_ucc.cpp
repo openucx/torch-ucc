@@ -19,6 +19,27 @@ const std::map<c10::DeviceType, ucs_memory_type_t> ucs_mtype_map = {
     {c10::kMetal, UCS_MEMORY_TYPE_UNKNOWN},
 };
 
+const std::map<c10::DeviceType, ucc_memory_type_t> ucc_mtype_map = {
+    {c10::kCPU, UCC_MEMORY_TYPE_HOST},
+    {c10::kCUDA, UCC_MEMORY_TYPE_CUDA},
+    {c10::kHIP, UCC_MEMORY_TYPE_ROCM},
+    {c10::kFPGA, UCC_MEMORY_TYPE_UNKNOWN},
+    {c10::kMSNPU, UCC_MEMORY_TYPE_UNKNOWN},
+    {c10::kXLA, UCC_MEMORY_TYPE_UNKNOWN},
+    {c10::kVulkan, UCC_MEMORY_TYPE_UNKNOWN},
+    {c10::kMetal, UCC_MEMORY_TYPE_UNKNOWN},
+};
+
+const std::map<at::ScalarType, ucc_datatype_t> ucc_type_map = {
+    {at::kByte, UCC_DT_UINT8},
+    {at::kChar, UCC_DT_INT8},
+    {at::kHalf, UCC_DT_FLOAT16},
+    {at::kDouble, UCC_DT_FLOAT64},
+    {at::kFloat, UCC_DT_FLOAT32},
+    {at::kInt, UCC_DT_INT32},
+    {at::kLong, UCC_DT_INT64},
+};
+
 void check_tensor(const std::vector<at::Tensor>& tensors) {
   if (tensors.size() != 1) {
     throw std::runtime_error("ProcessGroupUCC takes 1 tensor");
@@ -33,56 +54,35 @@ void check_tensor(const std::vector<at::Tensor>& tensors) {
   // TODO: check cuda case
 }
 
-ProcessGroupUCC::WorkUCX::~WorkUCX() {
-  if (request_ != nullptr) {
-    torch_ucx_request_free(request_);
-  }
-}
-
-bool ProcessGroupUCC::WorkUCX::isCompleted() {
-  if (request_ == nullptr) {
-    return true;
-  }
-  return (request_->status == TORCH_UCX_REQUEST_DONE);
-}
-
-bool ProcessGroupUCC::WorkUCX::isSuccess() const {
-  if (request_ == nullptr) {
-    return true;
-  }
-  return (request_->status != TORCH_UCX_REQUEST_ERROR);
-}
-
-bool ProcessGroupUCC::WorkUCX::wait(std::chrono::milliseconds /* unused */) {
-  while (!isCompleted())
-    ;
-  return true;
-}
-
 ProcessGroupUCC::WorkUCC::~WorkUCC() {
-  if (request_ != nullptr) {
-    ucc_collective_finalize(request_);
-  }
+  TORCH_CHECK(request_ == nullptr, "TorchUCC, request wasn't finalized");
 }
 
 bool ProcessGroupUCC::WorkUCC::isCompleted() {
-  if (request_ == nullptr) {
-    return true;
-  }
-  return (ucc_collective_test(request_) == UCC_OK);
+  return (status_ != UCC_INPROGRESS);
 }
 
 bool ProcessGroupUCC::WorkUCC::isSuccess() const {
-  if (request_ == nullptr) {
-    return true;
-  }
-  return (ucc_collective_test(request_) >= 0);
+  return (status_ >= 0);
 }
 
 bool ProcessGroupUCC::WorkUCC::wait(std::chrono::milliseconds /* unused */) {
   while (!isCompleted())
     ;
   return true;
+}
+
+void ProcessGroupUCC::WorkUCC::finalize() {
+  if (request_ != nullptr) {
+    if (isP2POp(opType_)) {
+      request_->status = UCC_INPROGRESS;
+      ucp_request_free(request_);
+    } else {
+      ucc_collective_finalize(request_);
+    }
+    status_ = UCC_OK;
+    request_ = nullptr;
+  }
 }
 
 CommUCX::CommUCX() {
@@ -100,13 +100,12 @@ CommUCX::CommUCX() {
   params.field_mask = UCP_PARAM_FIELD_FEATURES | UCP_PARAM_FIELD_REQUEST_SIZE |
       UCP_PARAM_FIELD_ESTIMATED_NUM_EPS | UCP_PARAM_FIELD_TAG_SENDER_MASK |
       UCP_PARAM_FIELD_REQUEST_INIT | UCP_PARAM_FIELD_REQUEST_CLEANUP;
-  params.request_size = sizeof(torch_ucx_request_t);
+  params.request_size = sizeof(ucc_coll_req_t);
   params.features = UCP_FEATURE_TAG;
   params.estimated_num_eps = 1; // TODO
   params.tag_sender_mask = TORCH_UCX_RANK_MASK;
   params.request_init = [](void* request) {
-    static_cast<torch_ucx_request_t*>(request)->status =
-        TORCH_UCX_REQUEST_ACTIVE;
+    static_cast<ucc_coll_req_h>(request)->status = UCC_INPROGRESS;
   };
   params.request_cleanup = [](void*) {};
   st = ucp_init(&params, config, &context);
@@ -124,6 +123,10 @@ CommUCX::CommUCX() {
     ucp_cleanup(context);
     throw std::runtime_error(ucs_status_string(st));
   }
+}
+
+void CommUCX::progress() {
+  ucp_worker_progress(worker);
 }
 
 CommUCX::~CommUCX() {
@@ -167,11 +170,11 @@ void CommPG::ucx_disconnect_eps(
     std::vector<ucp_ep_h>& eps,
     const c10::intrusive_ptr<Store>& store) {
   ucs_status_t st;
-  ucs_status_ptr_t close_req;
 
   for (ucp_ep_h& ep : eps) {
-    close_req = ucp_ep_close_nb(ep, UCP_EP_CLOSE_MODE_FLUSH);
+    ucs_status_ptr_t close_req = ucp_ep_close_nb(ep, UCP_EP_CLOSE_MODE_FLUSH);
     if (UCS_PTR_IS_ERR(close_req)) {
+      LOG(ERROR) << "failed to close endpoint";
       return;
     }
     if (UCS_PTR_IS_PTR(close_req)) {
@@ -182,17 +185,14 @@ void CommPG::ucx_disconnect_eps(
       ucp_request_free(close_req);
     }
   }
-  auto key_ep_closed = "epclosed";
-  auto num_closed_ep = store->add(key_ep_closed, 1);
-  std::vector<std::string> key_finished{"finished"};
-  if ((size_t)num_closed_ep == eps.size()) {
-    store->add(key_finished[0], 1);
+  if ((size_t)store->add("epclosed", 1) == eps.size()) {
+    store->add("finished", 1);
   } else {
-    store->wait(key_finished);
+    store->wait({"finished"});
   }
 }
 
-torch_ucx_request_t* CommPG::send_nb(
+ucc_coll_req_h CommPG::send_nb(
     ucp_ep_h ep,
     void* data,
     ucs_memory_type_t mtype,
@@ -205,16 +205,17 @@ torch_ucx_request_t* CommPG::send_nb(
   params.datatype = ucp_dt_make_contig(size);
   params.memory_type = mtype;
   params.cb.send = [](void* request, ucs_status_t status, void* user_data) {
-    static_cast<torch_ucx_request_t*>(request)->status = TORCH_UCX_REQUEST_DONE;
+    static_cast<ucc_coll_req_h>(request)->status = UCC_OK;
   };
   st = ucp_tag_send_nbx(ep, data, 1, ucp_tag, &params);
-  if (torch_ucx_check_req(st) != TORCH_UCC_OK) {
-    throw std::runtime_error("failed to send message");
-  };
-  return reinterpret_cast<torch_ucx_request_t*>(st);
+  if (UCS_PTR_IS_ERR(st)) {
+    LOG(ERROR) << "failed to send message: " << ucs_status_string(UCS_PTR_STATUS(st));
+    throw std::runtime_error(ucs_status_string(UCS_PTR_STATUS(st)));
+  }
+  return reinterpret_cast<ucc_coll_req_h>(st);
 }
 
-torch_ucx_request_t* CommPG::recv_nb(
+ucc_coll_req_h CommPG::recv_nb(
     void* data,
     ucs_memory_type_t mtype,
     size_t size,
@@ -229,15 +230,16 @@ torch_ucx_request_t* CommPG::recv_nb(
                       ucs_status_t status,
                       const ucp_tag_recv_info_t* info,
                       void* user_data) {
-    static_cast<torch_ucx_request_t*>(request)->status = TORCH_UCX_REQUEST_DONE;
+    static_cast<ucc_coll_req_h>(request)->status = UCC_OK;
   };
   params.memory_type = mtype;
   st = ucp_tag_recv_nbx(
       ucx_comm.worker, data, 1, ucp_tag, ucp_tag_mask, &params);
-  if (torch_ucx_check_req(st) != TORCH_UCC_OK) {
-    throw std::runtime_error("failed to recv message");
-  };
-  return reinterpret_cast<torch_ucx_request_t*>(st);
+  if (UCS_PTR_IS_ERR(st)) {
+    LOG(ERROR) << "failed to recv message: " << ucs_status_string(UCS_PTR_STATUS(st));
+    throw std::runtime_error(ucs_status_string(UCS_PTR_STATUS(st)));
+  }
+  return reinterpret_cast<ucc_coll_req_h>(st);
 }
 
 CommUCC::CommUCC() {
@@ -278,6 +280,10 @@ CommUCC::CommUCC() {
     LOG(ERROR) << "failed to create UCC context: " << ucc_status_string(st);
     throw std::runtime_error(ucc_status_string(st));
   }
+}
+
+void CommUCC::progress() {
+  ucc_context_progress(context);
 }
 
 CommUCC::~CommUCC() {
@@ -386,6 +392,7 @@ void CommPG::ucc_create_team(
     LOG(ERROR) << "failed to create UCC team: " << ucc_status_string(st);
     throw std::runtime_error(ucc_status_string(st));
   }
+  // TODO: don't delete
   delete coll_info;
 }
 
@@ -449,25 +456,9 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allgather_base(
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::barrier(
     const BarrierOptions& /* unused */) {
-  ucc_coll_req_h request;
-  ucc_coll_op_args_t coll;
-  ucc_status_t st;
-
-  coll.coll_type = UCC_COLL_TYPE_BARRIER,
-  st = ucc_collective_init(&coll, &request, team);
-  if (st != UCC_OK) {
-    LOG(ERROR) << "failed to init collective: " << ucc_status_string(st);
-    throw std::runtime_error(ucc_status_string(st));
-  }
-  st = ucc_collective_post(request);
-  if (st != UCC_OK) {
-    LOG(ERROR) << "failed to post collective: " << ucc_status_string(st);
-    throw std::runtime_error(ucc_status_string(st));
-  }
-
-  auto work = c10::make_intrusive<ProcessGroupUCC::WorkUCC>(request);
-  comm->enqueue_request(work);
-  return work;
+  ucc_coll_args_t coll;
+  coll.coll_type = UCC_COLL_TYPE_BARRIER;
+  return comm->enqueue_collective(OpType::BARRIER, coll, nullptr, team);
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::gather(
@@ -497,7 +488,45 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::alltoall_base(
     std::vector<int64_t>& outputSplitSizes,
     std::vector<int64_t>& inputSplitSizes,
     const AllToAllOptions& /* unused */) {
-  throw std::runtime_error("ProcessGroupUCC does not support alltoall_base");
+  ucc_coll_args_t coll;
+  AlltoallWorkData *data;
+
+  if ((outputSplitSizes.size() == 0) && (inputSplitSizes.size() == 0)) {
+    data = nullptr;
+    TORCH_CHECK(
+      (outputTensor.size(0) % size_ == 0) && (inputTensor.size(0) % size_ == 0),
+      "Tensor's dim 0 does not divide equally across group size");
+    coll.coll_type = UCC_COLL_TYPE_ALLTOALL;
+    coll.src.info.buffer = inputTensor.data_ptr();
+    coll.src.info.count = inputTensor.element_size() * inputTensor.numel() / size_;
+    coll.src.info.datatype = UCC_DT_UINT8;
+    coll.src.info.mem_type = ucc_mtype_map.at(inputTensor.device().type());
+    coll.dst.info.buffer = outputTensor.data_ptr();
+    coll.dst.info.count = outputTensor.element_size() * outputTensor.numel() / size_;
+    coll.dst.info.datatype = UCC_DT_UINT8;
+    coll.dst.info.mem_type = ucc_mtype_map.at(outputTensor.device().type());
+  } else {
+    AlltoallWorkData *data = new AlltoallWorkData(size_);
+    c10d::checkSplitSizes(inputSplitSizes, inputTensor, size_);
+    c10d::checkSplitSizes(outputSplitSizes, outputTensor, size_);
+    computeLengthsAndOffsets(outputSplitSizes, outputTensor, &data->recv_lengths, &data->recv_offsets);
+    computeLengthsAndOffsets(inputSplitSizes, inputTensor, &data->send_lengths, &data->send_offsets);
+    coll.mask = 0;
+    coll.coll_type = UCC_COLL_TYPE_ALLTOALLV;
+    coll.src.info_v.buffer = inputTensor.data_ptr();
+    coll.src.info_v.counts = (ucc_count_t*)data->send_lengths.data();
+    coll.src.info_v.displacements = (ucc_aint_t*)data->send_offsets.data();
+    coll.src.info_v.datatype = ucc_type_map.at(inputTensor.scalar_type());
+    coll.src.info_v.mem_type = ucc_mtype_map.at(inputTensor.device().type());
+    coll.dst.info_v.buffer = outputTensor.data_ptr();
+    coll.dst.info_v.counts = (ucc_count_t*)data->recv_lengths.data();
+    coll.dst.info_v.displacements = (ucc_aint_t*)data->recv_offsets.data();;
+    coll.dst.info_v.datatype = ucc_type_map.at(outputTensor.scalar_type());
+    coll.dst.info_v.mem_type = ucc_mtype_map.at(outputTensor.device().type());
+  }
+  auto r = comm->enqueue_collective(OpType::ALLTOALL_BASE, coll, std::unique_ptr<WorkData>(data), team);
+  TORCH_CHECK(r.defined(), "wrong request");
+  return r;
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::alltoall(
@@ -516,15 +545,13 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::send(
   ucp_tag_t ucp_tag;
 
   TORCH_UCX_MAKE_SEND_TAG(ucp_tag, tag, rank_, comm_id);
-  torch_ucx_request_t* request = comm->send_nb(
+  ucc_coll_req_h request = comm->send_nb(
       eps[dstRank],
       tensor.data_ptr(),
       ucs_mtype_map.at(tensor.device().type()),
       tensor.numel() * tensor.element_size(),
       ucp_tag);
-  auto work = c10::make_intrusive<ProcessGroupUCC::WorkUCX>(request);
-  comm->enqueue_request(work);
-  return work;
+  return comm->enqueue_p2p(OpType::SEND, request);
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::recv(
@@ -536,15 +563,13 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::recv(
   ucp_tag_t ucp_tag, ucp_tag_mask;
 
   TORCH_UCX_MAKE_RECV_TAG(ucp_tag, ucp_tag_mask, tag, srcRank, comm_id);
-  torch_ucx_request_t* request = comm->recv_nb(
+  ucc_coll_req_h request = comm->recv_nb(
       tensor.data_ptr(),
       ucs_mtype_map.at(tensor.device().type()),
       tensor.numel() * tensor.element_size(),
       ucp_tag,
       ucp_tag_mask);
-  auto work = c10::make_intrusive<ProcessGroupUCC::WorkUCX>(request);
-  comm->enqueue_request(work);
-  return work;
+  return comm->enqueue_p2p(OpType::RECV, request);
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::recvAnysource(
@@ -556,15 +581,13 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::recvAnysource(
 
   TORCH_UCX_MAKE_RECV_TAG(
       ucp_tag, ucp_tag_mask, tag, TORCH_UCX_ANY_SOURCE, comm_id);
-  torch_ucx_request_t* request = comm->recv_nb(
+  ucc_coll_req_h request = comm->recv_nb(
       tensor.data_ptr(),
       ucs_mtype_map.at(tensor.device().type()),
       tensor.numel() * tensor.element_size(),
       ucp_tag,
       ucp_tag_mask);
-  auto work = c10::make_intrusive<ProcessGroupUCC::WorkUCX>(request);
-  comm->enqueue_request(work);
-  return work;
+  return comm->enqueue_p2p(OpType::RECVANYSOURCE, request);
 }
 
 c10::intrusive_ptr<ProcessGroup> ProcessGroupUCC::createProcessGroupUCC(
