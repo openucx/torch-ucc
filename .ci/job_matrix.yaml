@@ -4,6 +4,7 @@ job: 'torch-ucc'
 registry_host: 'harbor.mellanox.com'
 # TODO change
 registry_path: '/swx-infra/torch-ucc'
+#registry_path: '/torch-ucc'
 registry_auth: '1daaea28-800e-425f-a91f-3bd3e9136eea'
 
 kubernetes:
@@ -16,63 +17,44 @@ volumes:
   - { mountPath: '/.autodirect/sw/release', hostPath: '/.autodirect/sw/release' }
 
 env:
-  CUDA_HOME: '/usr/local/cuda'
-  UCX_BRANCH: 'v1.10.x'
-  UCX_SRC_DIR: '${WORKSPACE}/ucx'
-  UCX_BUILD_DIR: '${UCX_SRC_DIR}/build'
-  UCX_INSTALL_DIR: '${UCX_BUILD_DIR}/_install'
-  UCC_SRC_DIR: '${WORKSPACE}/ucc'
-  XCCL_SRC_DIR: '${WORKSPACE}/xccl'
-  XCCL_BUILD_DIR: '${XCCL_SRC_DIR}/build'
-  XCCL_INSTALL_DIR: '${XCCL_BUILD_DIR}/_install'
+  CUDA_VER: '11.2.1'
+  TORCH_UCC_URI_SUFFIX: '${TORCH_UCC_VERSION}/x86_64/ubuntu20.04/cuda${CUDA_VER}'
+  TORCH_UCC_ROOT_DIR: '/opt/nvidia/torch-ucc'
+  TORCH_UCC_SRC_DIR: '${TORCH_UCC_ROOT_DIR}/src'
 
 runs_on_dockers:
-  - { file: '.ci/Dockerfile.ubuntu20.04', name: 'ubuntu20.04', tag: 'latest', arch: 'x86_64' }
+  - {
+    file: '.ci/Dockerfile.ubuntu20.04',
+    name: 'ubuntu20.04',
+    tag: 'latest',
+    arch: 'x86_64',
+    uri: '${TORCH_UCC_URI_SUFFIX}',
+    build_args: '--rm --no-cache --build-arg CUDA_VER=${CUDA_VER} --build-arg TORCH_UCC_ROOT_DIR=${TORCH_UCC_ROOT_DIR}',
+  }
+
+# TODO debug
+timeout_minutes: '180'
 
 steps:
   #============================================================================
   - name: Check Env
-    shell: '#!/bin/bash -eEx'
     run: |
       echo "INFO: check environment"
-      find .
       printenv
       cat /proc/1/cgroup
       cat /etc/*release*
       id
+      find /opt/nvidia
   #============================================================================
-  - name: Build UCX
-    shell: '#!/bin/bash -eEx'
+  - name: Run XCCL tests
     run: |
-      echo "INFO: Build UCX"
-      cd ${UCX_SRC_DIR}
-      git checkout ${UCX_BRANCH}
-      ${UCX_SRC_DIR}/autogen.sh
-      mkdir -p ${UCX_BUILD_DIR}
-      cd ${UCX_BUILD_DIR}
-      ${UCX_SRC_DIR}/configure --enable-mt --with-cuda=${CUDA_HOME} --prefix=${UCX_INSTALL_DIR}
-      make -j install
+      echo "INFO: Run XCCL tests"
+      ${TORCH_UCC_SRC_DIR}/.ci/scripts/run_tests_xccl.sh
+      #sleep 10000
   #============================================================================
-  - name: Build XCCL
-    shell: '#!/bin/bash -eEx'
+  - name: Run Torch-UCC tests
     run: |
-      echo "INFO: Build XCCL"
-      cd ${XCCL_SRC_DIR}
-      # TODO tmp W/A
-      sed -i 's|NVCCFLAGS = .*|NVCCFLAGS = "${UCS_CPPFLAGS} -I${XCCL_TOP_SRCDIR}/src -I${XCCL_TOP_SRCDIR}/src/core" --compiler-options -fno-rtti,-fno-exceptions|g' ${XCCL_SRC_DIR}/src/utils/cuda/kernels/Makefile.am
-      ${XCCL_SRC_DIR}/autogen.sh
-      mkdir -p ${XCCL_BUILD_DIR}
-      cd ${XCCL_BUILD_DIR}
-      ${XCCL_SRC_DIR}/configure --with-cuda=${CUDA_HOME}  --with-ucx=${UCX_INSTALL_DIR} \
-        --prefix=${XCCL_INSTALL_DIR}
-      make -j install
-  #============================================================================
-  - name: Install Torch-UCC
-    run: |
-      echo "INFO: Install Torch-UCC"
-      cd ${WORKSPACE}
-      UCX_HOME=${UCX_INSTALL_DIR}
-      XCCL_HOME=${XCCL_INSTALL_DIR}
-      WITH_CUDA=${CUDA_HOME}
-      python setup.py install
+      echo "INFO: Run Torch-UCC tests"
+      ${TORCH_UCC_SRC_DIR}/.ci/scripts/run_tests_torch_ucc.sh
+      #sleep 20000
   #============================================================================

@@ -1,7 +1,24 @@
-FROM nvidia/cuda:11.2.1-devel-ubuntu20.04
+ARG CUDA_VER='11.2.1'
+FROM nvidia/cuda:${CUDA_VER}-devel-ubuntu20.04
+#==============================================================================
+ARG TORCH_UCC_ROOT_DIR=/opt/nvidia/torch-ucc
+ENV TORCH_UCC_SRC_DIR=${TORCH_UCC_ROOT_DIR}/src
+ENV TORCH_UCC_PKG_DIR=${TORCH_UCC_ROOT_DIR}/pkg
+ENV TORCH_UCC_BIN_DIR=${TORCH_UCC_ROOT_DIR}/bin
+ENV CUDA_HOME=/usr/local/cuda
+ENV UCX_BRANCH=v1.10.x
+ENV UCX_BUILD_TYPE=release-mt
+ENV UCX_INSTALL_DIR=${TORCH_UCC_BIN_DIR}/ucx/build-${UCX_BUILD_TYPE}
+ENV XCCL_BUILD_TYPE=debug
+ENV XCCL_INSTALL_DIR=${TORCH_UCC_BIN_DIR}/xccl/build-${XCCL_BUILD_TYPE}
+#==============================================================================
+RUN mkdir -p ${TORCH_UCC_SRC_DIR} && \
+    mkdir -p ${TORCH_UCC_PKG_DIR} && \
+    mkdir -p ${TORCH_UCC_BIN_DIR}
 
+COPY . ${TORCH_UCC_SRC_DIR}
+#==============================================================================
 ARG DEBIAN_FRONTEND=noninteractive
-
 RUN apt update && \
     apt install -y \
         apt-utils \
@@ -14,16 +31,48 @@ RUN apt update && \
         ibverbs-utils \
         libnuma-dev \
         libtool-bin \
+        ninja-build \
+        openmpi-bin \
         vim \
     && \
     rm -rf /var/lib/apt/lists/*
-
+#==============================================================================
+# Build UCX
+RUN echo "INFO: Build UCX" && \
+    cd ${TORCH_UCC_SRC_DIR}/ucx && \
+    git checkout ${UCX_BRANCH} && \
+    ${TORCH_UCC_SRC_DIR}/ucx/autogen.sh && \
+    mkdir -p ${TORCH_UCC_SRC_DIR}/ucx/build-${UCX_BUILD_TYPE} && \
+    cd ${TORCH_UCC_SRC_DIR}/ucx/build-${UCX_BUILD_TYPE} && \
+    ${TORCH_UCC_SRC_DIR}/ucx/contrib/configure-release-mt --with-cuda=${CUDA_HOME} --prefix=${UCX_INSTALL_DIR} && \
+    make -j install && \
+    echo "${UCX_INSTALL_DIR}/lib" > /etc/ld.so.conf.d/ucx.conf && \
+    ldconfig && \
+    ldconfig -p | grep -i ucx && \
+    cd ${UCX_INSTALL_DIR} && tar cfz ${TORCH_UCC_PKG_DIR}/ucx-${UCX_BUILD_TYPE}.tgz --owner=0 --group=0 .
+ENV PATH=${UCX_INSTALL_DIR}/bin:${PATH}
+#==============================================================================
+# Build XCCL
+RUN echo "INFO: Build XCCL" && \
+    cd ${TORCH_UCC_SRC_DIR}/xccl && \
+    ${TORCH_UCC_SRC_DIR}/xccl/autogen.sh && \
+    mkdir -p ${TORCH_UCC_SRC_DIR}/xccl/build-${XCCL_BUILD_TYPE} && \
+    cd ${TORCH_UCC_SRC_DIR}/xccl/build-${XCCL_BUILD_TYPE} && \
+    ${TORCH_UCC_SRC_DIR}/xccl/configure --with-ucx=${UCX_INSTALL_DIR} \
+        --prefix=${XCCL_INSTALL_DIR} --enable-debug && \
+    make -j install && \
+    echo "${XCCL_INSTALL_DIR}/lib" > /etc/ld.so.conf.d/xccl.conf && \
+    ldconfig && \
+    ldconfig -p | grep -i xccl && \
+    make -C test && \
+    cd ${XCCL_INSTALL_DIR} && tar cfz ${TORCH_UCC_PKG_DIR}/xccl-${XCCL_BUILD_TYPE}.tgz --owner=0 --group=0 .
+#==============================================================================
 # Install conda
 RUN curl -LO http://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh && \
     bash Miniconda3-latest-Linux-x86_64.sh -p /opt/conda -b && \
     rm -f Miniconda3-latest-Linux-x86_64.sh
 ENV PATH /opt/conda/bin:${PATH}
-
+#==============================================================================
 # Install conda python
 RUN conda update -y conda && \
     conda install -c anaconda -y \
@@ -32,11 +81,11 @@ RUN conda update -y conda && \
     pip install --no-cache-dir python-hostlist
 
 RUN ln -s /opt/conda/bin/python /usr/bin/python
-
-WORKDIR "/workspace"
-
-# Install PyTorch
-RUN git clone https://github.com/pytorch/pytorch.git && \
+RUN python3 -m pip install --user --upgrade setuptools wheel auditwheel check-wheel-contents
+#==============================================================================
+# Build and Install PyTorch
+RUN cd /tmp && \
+    git clone https://github.com/pytorch/pytorch.git && \
     cd pytorch && \
     git submodule sync --recursive && \
     git submodule update --init --recursive && \
@@ -54,5 +103,19 @@ RUN git clone https://github.com/pytorch/pytorch.git && \
     USE_QNNPACK=0 \
     USE_XNNPACK=0 \
     USE_KINETO=1 \
+    MAX_JOBS=$(($(nproc)-1)) \
     python setup.py install && \
-    rm -rf /workspace/pytorch
+    rm -rf /tmp/pytorch
+#==============================================================================
+# Install torch_ucc python module and build a wheel package
+RUN echo "INFO: Install Torch-UCC" && \
+    cd ${TORCH_UCC_SRC_DIR} && \
+    env \
+        UCX_HOME=${UCX_INSTALL_DIR} \
+        XCCL_HOME=${XCCL_INSTALL_DIR} \
+        WITH_CUDA=${CUDA_HOME} \
+        python setup.py install bdist_wheel && \
+    pip3 list | grep torch  && \
+    python -c 'import torch, torch_ucc' && \
+    cp ${TORCH_UCC_SRC_DIR}/dist/*.whl ${TORCH_UCC_PKG_DIR}
+#==============================================================================
