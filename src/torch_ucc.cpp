@@ -30,7 +30,7 @@ const std::map<c10::DeviceType, ucc_memory_type_t> ucc_mtype_map = {
     {c10::kMetal, UCC_MEMORY_TYPE_UNKNOWN},
 };
 
-const std::map<at::ScalarType, ucc_datatype_t> ucc_type_map = {
+const std::map<at::ScalarType, ucc_datatype_t> ucc_dtype_map = {
     {at::kByte, UCC_DT_UINT8},
     {at::kChar, UCC_DT_INT8},
     {at::kHalf, UCC_DT_FLOAT16},
@@ -38,6 +38,16 @@ const std::map<at::ScalarType, ucc_datatype_t> ucc_type_map = {
     {at::kFloat, UCC_DT_FLOAT32},
     {at::kInt, UCC_DT_INT32},
     {at::kLong, UCC_DT_INT64},
+};
+
+const std::map<ReduceOp, ucc_reduction_op_t> ucc_op_map = {
+    {ReduceOp::SUM, UCC_OP_SUM},
+    {ReduceOp::PRODUCT, UCC_OP_PROD},
+    {ReduceOp::MIN, UCC_OP_MIN},
+    {ReduceOp::MAX, UCC_OP_MAX},
+    {ReduceOp::BAND, UCC_OP_BAND},
+    {ReduceOp::BOR, UCC_OP_BOR},
+    {ReduceOp::BXOR, UCC_OP_BXOR},
 };
 
 void check_tensor(const std::vector<at::Tensor>& tensors) {
@@ -417,31 +427,6 @@ ProcessGroupUCC::~ProcessGroupUCC() {
   comm->ucx_disconnect_eps(eps, store_);
 }
 
-c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::broadcast(
-    std::vector<at::Tensor>& tensors,
-    const BroadcastOptions& opts) {
-  throw std::runtime_error("ProcessGroupUCC does not support broadcast");
-}
-
-c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allreduce(
-    std::vector<at::Tensor>& tensors,
-    const AllreduceOptions& opts) {
-  throw std::runtime_error("ProcessGroupUCC does not support allreduce");
-}
-
-c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allreduce_coalesced(
-    std::vector<at::Tensor>& /* unused */,
-    const AllreduceCoalescedOptions& /* unused */) {
-  throw std::runtime_error(
-      "ProcessGroupUCC does not support allreduce_coalesced");
-}
-
-c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::reduce(
-    std::vector<at::Tensor>& /* unused */,
-    const ReduceOptions& /* unused */) {
-  throw std::runtime_error("ProcessGroupUCC does not support reduce");
-}
-
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allgather(
     std::vector<std::vector<at::Tensor>>& outputTensors,
     std::vector<at::Tensor>& inputTensors,
@@ -456,32 +441,39 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allgather_base(
   throw std::runtime_error("ProcessGroupUCC does not support allgather_base");
 }
 
-c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::barrier(
-    const BarrierOptions& /* unused */) {
-  ucc_coll_args_t coll;
-  coll.coll_type = UCC_COLL_TYPE_BARRIER;
-  return comm->enqueue_collective(OpType::BARRIER, coll, nullptr, team);
+c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allreduce(
+    std::vector<at::Tensor>& tensors,
+    const AllreduceOptions& opts) {
+    check_tensor(tensors);
+    auto& tensor = tensors[0];
+    ucc_coll_args_t coll;
+    coll.coll_type = UCC_COLL_TYPE_ALLREDUCE;
+    coll.mask = UCC_COLL_ARGS_FIELD_PREDEFINED_REDUCTIONS;
+    coll.reduce.predefined_op = ucc_op_map.at(opts.reduceOp);
+    coll.src.info.buffer = tensor.data_ptr();
+    coll.src.info.count = tensor.numel();
+    coll.src.info.datatype = ucc_dtype_map.at(tensor.scalar_type());
+    coll.src.info.mem_type = ucc_mtype_map.at(tensor.device().type());
+    coll.dst.info.buffer = tensor.data_ptr();
+    coll.dst.info.count = tensor.numel();
+    coll.dst.info.datatype = ucc_dtype_map.at(tensor.scalar_type());
+    coll.dst.info.mem_type = ucc_mtype_map.at(tensor.device().type());
+    return comm->enqueue_collective(
+      OpType::ALLREDUCE, coll, nullptr, team);
 }
 
-c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::gather(
-    std::vector<std::vector<at::Tensor>>& /* unused */,
+c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allreduce_coalesced(
     std::vector<at::Tensor>& /* unused */,
-    const GatherOptions& /* unused */) {
-  throw std::runtime_error("ProcessGroupUCC does not support gather");
+    const AllreduceCoalescedOptions& /* unused */) {
+  throw std::runtime_error(
+      "ProcessGroupUCC does not support allreduce_coalesced");
 }
 
-c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::scatter(
+c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::alltoall(
     std::vector<at::Tensor>& /* unused */,
-    std::vector<std::vector<at::Tensor>>& /* unused */,
-    const ScatterOptions& /* unused */) {
-  throw std::runtime_error("ProcessGroupUCC does not support scatter");
-}
-
-c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::reduce_scatter(
     std::vector<at::Tensor>& /* unused */,
-    std::vector<std::vector<at::Tensor>>& /* unused */,
-    const ReduceScatterOptions& /* unused */) {
-  throw std::runtime_error("ProcessGroupUCC does not support reduce_scatter");
+    const AllToAllOptions& /* unused */) {
+  throw std::runtime_error("ProcessGroupUCC does not support alltoall");
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::alltoall_base(
@@ -526,26 +518,66 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::alltoall_base(
     coll.src.info_v.buffer = inputTensor.data_ptr();
     coll.src.info_v.counts = (ucc_count_t*)data->send_lengths.data();
     coll.src.info_v.displacements = (ucc_aint_t*)data->send_offsets.data();
-    coll.src.info_v.datatype = ucc_type_map.at(inputTensor.scalar_type());
+    coll.src.info_v.datatype = ucc_dtype_map.at(inputTensor.scalar_type());
     coll.src.info_v.mem_type = ucc_mtype_map.at(inputTensor.device().type());
     coll.dst.info_v.buffer = outputTensor.data_ptr();
     coll.dst.info_v.counts = (ucc_count_t*)data->recv_lengths.data();
     coll.dst.info_v.displacements = (ucc_aint_t*)data->recv_offsets.data();
-    ;
-    coll.dst.info_v.datatype = ucc_type_map.at(outputTensor.scalar_type());
+    coll.dst.info_v.datatype = ucc_dtype_map.at(outputTensor.scalar_type());
     coll.dst.info_v.mem_type = ucc_mtype_map.at(outputTensor.device().type());
   }
-  auto r = comm->enqueue_collective(
+  return comm->enqueue_collective(
       OpType::ALLTOALL_BASE, coll, std::unique_ptr<WorkData>(data), team);
-  TORCH_CHECK(r.defined(), "wrong request");
-  return r;
 }
 
-c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::alltoall(
+c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::barrier(
+    const BarrierOptions& /* unused */) {
+  ucc_coll_args_t coll;
+  coll.coll_type = UCC_COLL_TYPE_BARRIER;
+  return comm->enqueue_collective(OpType::BARRIER, coll, nullptr, team);
+}
+
+c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::broadcast(
+    std::vector<at::Tensor>& tensors,
+    const BroadcastOptions& opts) {
+    check_tensor(tensors);
+    auto& tensor = tensors[0];
+    ucc_coll_args_t coll;
+    coll.coll_type = UCC_COLL_TYPE_BCAST;
+    coll.src.info.buffer = tensor.data_ptr();
+    coll.src.info.count = tensor.numel();
+    coll.src.info.datatype = ucc_dtype_map.at(tensor.scalar_type());
+    coll.src.info.mem_type = ucc_mtype_map.at(tensor.device().type());
+    coll.root = opts.rootRank;
+    return comm->enqueue_collective(
+      OpType::BROADCAST, coll, nullptr, team);
+}
+
+c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::gather(
+    std::vector<std::vector<at::Tensor>>& /* unused */,
     std::vector<at::Tensor>& /* unused */,
+    const GatherOptions& /* unused */) {
+  throw std::runtime_error("ProcessGroupUCC does not support gather");
+}
+
+c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::reduce(
     std::vector<at::Tensor>& /* unused */,
-    const AllToAllOptions& /* unused */) {
-  throw std::runtime_error("ProcessGroupUCC does not support alltoall");
+    const ReduceOptions& /* unused */) {
+  throw std::runtime_error("ProcessGroupUCC does not support reduce");
+}
+
+c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::reduce_scatter(
+    std::vector<at::Tensor>& /* unused */,
+    std::vector<std::vector<at::Tensor>>& /* unused */,
+    const ReduceScatterOptions& /* unused */) {
+  throw std::runtime_error("ProcessGroupUCC does not support reduce_scatter");
+}
+
+c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::scatter(
+    std::vector<at::Tensor>& /* unused */,
+    std::vector<std::vector<at::Tensor>>& /* unused */,
+    const ScatterOptions& /* unused */) {
+  throw std::runtime_error("ProcessGroupUCC does not support scatter");
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::send(
