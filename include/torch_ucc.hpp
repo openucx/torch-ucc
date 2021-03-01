@@ -17,11 +17,16 @@
 #include <c10d/Store.hpp>
 #include <c10d/Types.hpp>
 #include <c10d/Utils.hpp>
+#ifdef USE_CUDA
+#include <ATen/cuda/CUDAEvent.h>
+#include <c10/cuda/CUDAStream.h>
+#endif
 #include <ucc/api/ucc.h>
 #include <ucp/api/ucp.h>
 
 namespace c10d {
 
+#define TORCH_UCC_DEVICE_NOT_SET -2
 #define TORCH_UCX_COMM_BITS 15
 #define TORCH_UCX_RANK_BITS 16
 #define TORCH_UCX_TAG_BITS 32
@@ -115,6 +120,19 @@ class ProcessGroupUCC : public ProcessGroup {
     std::vector<uint32_t> recv_offsets;
   };
 
+  class AllgatherWorkData : public WorkData {
+   public:
+    AllgatherWorkData(int size)
+        : send_lengths(size),
+          send_offsets(size),
+          recv_lengths(size),
+          recv_offsets(size) {}
+    std::vector<uint64_t> send_lengths;
+    std::vector<uint64_t> send_offsets;
+    std::vector<uint64_t> recv_lengths;
+    std::vector<uint64_t> recv_offsets;
+  };
+
   class WorkUCC : public ProcessGroup::Work {
     friend class ProcessGroupUCC;
     friend class CommPG;
@@ -146,6 +164,8 @@ class ProcessGroupUCC : public ProcessGroup {
       const c10::intrusive_ptr<Store>& store,
       int rank = -1,
       int size = -1);
+
+  void initComm(c10::Device dev);
 
   ~ProcessGroupUCC() override;
 
@@ -266,7 +286,7 @@ class CommUCC : public CommBase {
 class CommPG {
   CommUCX ucx_comm;
   CommUCC ucc_comm;
-
+  c10::DeviceIndex device_index;
   std::mutex mutex;
   std::thread progress_thread;
   std::condition_variable queue_produce_cv;
@@ -275,7 +295,11 @@ class CommPG {
   bool stop_progress_loop;
 
  public:
-  CommPG() {
+  c10::DeviceIndex cuda_device_index;
+  CommPG(c10::Device dev) : cuda_device_index(TORCH_UCC_DEVICE_NOT_SET) {
+    if (dev.is_cuda()) {
+      cuda_device_index = dev.index();
+    }
     stop_progress_loop = false;
     progress_thread = std::thread(&CommPG::progress_loop, this);
   }
@@ -287,6 +311,7 @@ class CommPG {
     queue_produce_cv.notify_all();
     progress_thread.join();
   }
+
   void ucx_connect_eps(
       std::vector<ucp_ep_h>& eps,
       int rank,
@@ -348,7 +373,7 @@ class CommPG {
     return work;
   }
 
-  static std::shared_ptr<CommPG> get_comm(uint32_t& id) {
+  static std::shared_ptr<CommPG> get_comm(uint32_t& id, c10::Device dev) {
     static std::mutex m;
     static std::weak_ptr<CommPG> comm;
     static uint32_t comm_id;
@@ -357,14 +382,28 @@ class CommPG {
     id = (comm_id++ % TORCH_UCX_COMM_BITS);
     std::shared_ptr<CommPG> shared_comm = comm.lock();
     if (!shared_comm) {
-      shared_comm = std::make_shared<CommPG>();
+      shared_comm = std::make_shared<CommPG>(dev);
       comm = shared_comm;
+    } else {
+      if (dev.is_cuda()) {
+        if ((shared_comm->cuda_device_index != TORCH_UCC_DEVICE_NOT_SET) &&
+            (shared_comm->cuda_device_index != dev.index())) {
+          LOG(ERROR)
+              << "ucc communicator was initialized with different cuda device,"
+              << "multi device is not supported";
+          throw std::runtime_error(ucc_status_string(UCC_ERR_NOT_SUPPORTED));
+        }
+        shared_comm->cuda_device_index = dev.index();
+      }
     }
     return shared_comm;
   }
 
   void progress_loop() {
     std::unique_lock<std::mutex> lock(mutex);
+#ifdef USE_CUDA
+    bool device_set = false;
+#endif
     while (!stop_progress_loop) {
       if (progress_queue.empty()) {
         queue_produce_cv.wait(lock);
@@ -374,6 +413,12 @@ class CommPG {
       progress_queue.pop_front();
       lock.unlock();
       queue_consume_cv.notify_one();
+#ifdef USE_CUDA
+      if ((!device_set) && (cuda_device_index != TORCH_UCC_DEVICE_NOT_SET)) {
+        c10::cuda::set_device(cuda_device_index);
+        device_set = true;
+      }
+#endif
       while (work->request_->status == UCC_INPROGRESS) {
         work->comm_->progress();
       }

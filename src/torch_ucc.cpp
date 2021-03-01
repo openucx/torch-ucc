@@ -50,6 +50,12 @@ const std::map<ReduceOp, ucc_reduction_op_t> ucc_op_map = {
     {ReduceOp::BXOR, UCC_OP_BXOR},
 };
 
+void check_device(c10::Device dev1, c10::Device dev2) {
+  if (dev1.is_cuda() && dev2.is_cuda() && dev1 != dev2) {
+    throw std::runtime_error("ProcessGroupUCC multidevice is not supported");
+  }
+}
+
 void check_tensor(const std::vector<at::Tensor>& tensors) {
   if (tensors.size() != 1) {
     throw std::runtime_error("ProcessGroupUCC takes 1 tensor");
@@ -417,9 +423,7 @@ ProcessGroupUCC::ProcessGroupUCC(
     int rank,
     int size)
     : ProcessGroup(rank, size), store_(store) {
-  comm = CommPG::get_comm(comm_id);
-  comm->ucx_connect_eps(eps, rank, size, store);
-  comm->ucc_create_team(team, rank, size, store);
+  comm = nullptr;
 }
 
 ProcessGroupUCC::~ProcessGroupUCC() {
@@ -431,7 +435,35 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allgather(
     std::vector<std::vector<at::Tensor>>& outputTensors,
     std::vector<at::Tensor>& inputTensors,
     const AllgatherOptions& /* unused */) {
-  throw std::runtime_error("ProcessGroupUCC does not support allgather");
+  auto& tensor = inputTensors[0];
+  check_device(tensor.device(), outputTensors[0][0].device());
+  initComm(tensor.device());
+
+  AllgatherWorkData* data = new AllgatherWorkData(size_);
+  for (int i = 0; i < size_; i++) {
+    data->send_lengths[i] = tensor.element_size() * tensor.numel();
+    data->send_offsets[i] = 0;
+    data->recv_lengths[i] = tensor.element_size() * tensor.numel();
+    data->recv_offsets[i] = (uint64_t)outputTensors[0][i].data_ptr();
+  }
+  ucc_coll_args_t coll;
+  coll.mask = UCC_COLL_ARGS_FIELD_FLAGS;
+  coll.flags =
+      UCC_COLL_ARGS_FLAG_COUNT_64BIT | UCC_COLL_ARGS_FLAG_DISPLACEMENTS_64BIT;
+  coll.coll_type = UCC_COLL_TYPE_ALLTOALLV;
+  coll.src.info_v.buffer = tensor.data_ptr();
+  coll.src.info_v.counts = (ucc_count_t*)data->send_lengths.data();
+  coll.src.info_v.displacements = (ucc_aint_t*)data->send_offsets.data();
+  coll.src.info_v.datatype = UCC_DT_UINT8;
+  coll.src.info_v.mem_type = ucc_mtype_map.at(tensor.device().type());
+  coll.dst.info_v.buffer = nullptr;
+  coll.dst.info_v.counts = (ucc_count_t*)data->recv_lengths.data();
+  coll.dst.info_v.displacements = (ucc_aint_t*)data->recv_offsets.data();
+  coll.dst.info_v.datatype = UCC_DT_UINT8;
+  coll.dst.info_v.mem_type =
+      ucc_mtype_map.at(outputTensors[0][0].device().type());
+  return comm->enqueue_collective(
+      OpType::ALLGATHER, coll, std::unique_ptr<WorkData>(data), team);
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allgather_base(
@@ -444,22 +476,23 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allgather_base(
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allreduce(
     std::vector<at::Tensor>& tensors,
     const AllreduceOptions& opts) {
-    check_tensor(tensors);
-    auto& tensor = tensors[0];
-    ucc_coll_args_t coll;
-    coll.coll_type = UCC_COLL_TYPE_ALLREDUCE;
-    coll.mask = UCC_COLL_ARGS_FIELD_PREDEFINED_REDUCTIONS;
-    coll.reduce.predefined_op = ucc_op_map.at(opts.reduceOp);
-    coll.src.info.buffer = tensor.data_ptr();
-    coll.src.info.count = tensor.numel();
-    coll.src.info.datatype = ucc_dtype_map.at(tensor.scalar_type());
-    coll.src.info.mem_type = ucc_mtype_map.at(tensor.device().type());
-    coll.dst.info.buffer = tensor.data_ptr();
-    coll.dst.info.count = tensor.numel();
-    coll.dst.info.datatype = ucc_dtype_map.at(tensor.scalar_type());
-    coll.dst.info.mem_type = ucc_mtype_map.at(tensor.device().type());
-    return comm->enqueue_collective(
-      OpType::ALLREDUCE, coll, nullptr, team);
+  check_tensor(tensors);
+  auto& tensor = tensors[0];
+  initComm(tensor.device());
+
+  ucc_coll_args_t coll;
+  coll.coll_type = UCC_COLL_TYPE_ALLREDUCE;
+  coll.mask = UCC_COLL_ARGS_FIELD_PREDEFINED_REDUCTIONS;
+  coll.reduce.predefined_op = ucc_op_map.at(opts.reduceOp);
+  coll.src.info.buffer = tensor.data_ptr();
+  coll.src.info.count = tensor.numel();
+  coll.src.info.datatype = ucc_dtype_map.at(tensor.scalar_type());
+  coll.src.info.mem_type = ucc_mtype_map.at(tensor.device().type());
+  coll.dst.info.buffer = tensor.data_ptr();
+  coll.dst.info.count = tensor.numel();
+  coll.dst.info.datatype = ucc_dtype_map.at(tensor.scalar_type());
+  coll.dst.info.mem_type = ucc_mtype_map.at(tensor.device().type());
+  return comm->enqueue_collective(OpType::ALLREDUCE, coll, nullptr, team);
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allreduce_coalesced(
@@ -482,6 +515,8 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::alltoall_base(
     std::vector<int64_t>& outputSplitSizes,
     std::vector<int64_t>& inputSplitSizes,
     const AllToAllOptions& /* unused */) {
+  check_device(inputTensor.device(), outputTensor.device());
+  initComm(inputTensor.device());
   ucc_coll_args_t coll;
   AlltoallWorkData* data;
 
@@ -532,6 +567,8 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::alltoall_base(
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::barrier(
     const BarrierOptions& /* unused */) {
+  initComm(c10::DeviceType::CPU);
+
   ucc_coll_args_t coll;
   coll.coll_type = UCC_COLL_TYPE_BARRIER;
   return comm->enqueue_collective(OpType::BARRIER, coll, nullptr, team);
@@ -540,17 +577,18 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::barrier(
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::broadcast(
     std::vector<at::Tensor>& tensors,
     const BroadcastOptions& opts) {
-    check_tensor(tensors);
-    auto& tensor = tensors[0];
-    ucc_coll_args_t coll;
-    coll.coll_type = UCC_COLL_TYPE_BCAST;
-    coll.src.info.buffer = tensor.data_ptr();
-    coll.src.info.count = tensor.numel();
-    coll.src.info.datatype = ucc_dtype_map.at(tensor.scalar_type());
-    coll.src.info.mem_type = ucc_mtype_map.at(tensor.device().type());
-    coll.root = opts.rootRank;
-    return comm->enqueue_collective(
-      OpType::BROADCAST, coll, nullptr, team);
+  check_tensor(tensors);
+  auto& tensor = tensors[0];
+  initComm(tensor.device());
+
+  ucc_coll_args_t coll;
+  coll.coll_type = UCC_COLL_TYPE_BCAST;
+  coll.src.info.buffer = tensor.data_ptr();
+  coll.src.info.count = tensor.numel();
+  coll.src.info.datatype = ucc_dtype_map.at(tensor.scalar_type());
+  coll.src.info.mem_type = ucc_mtype_map.at(tensor.device().type());
+  coll.root = opts.rootRank;
+  return comm->enqueue_collective(OpType::BROADCAST, coll, nullptr, team);
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::gather(
@@ -586,8 +624,9 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::send(
     int tag) {
   check_tensor(tensors);
   auto& tensor = tensors[0];
-  ucp_tag_t ucp_tag;
+  initComm(tensor.device());
 
+  ucp_tag_t ucp_tag;
   TORCH_UCX_MAKE_SEND_TAG(ucp_tag, tag, rank_, comm_id);
   ucc_coll_req_h request = comm->send_nb(
       eps[dstRank],
@@ -604,8 +643,9 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::recv(
     int tag) {
   check_tensor(tensors);
   auto& tensor = tensors[0];
-  ucp_tag_t ucp_tag, ucp_tag_mask;
+  initComm(tensor.device());
 
+  ucp_tag_t ucp_tag, ucp_tag_mask;
   TORCH_UCX_MAKE_RECV_TAG(ucp_tag, ucp_tag_mask, tag, srcRank, comm_id);
   ucc_coll_req_h request = comm->recv_nb(
       tensor.data_ptr(),
@@ -621,8 +661,9 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::recvAnysource(
     int tag) {
   check_tensor(tensors);
   auto& tensor = tensors[0];
-  ucp_tag_t ucp_tag, ucp_tag_mask;
+  initComm(tensor.device());
 
+  ucp_tag_t ucp_tag, ucp_tag_mask;
   TORCH_UCX_MAKE_RECV_TAG(
       ucp_tag, ucp_tag_mask, tag, TORCH_UCX_ANY_SOURCE, comm_id);
   ucc_coll_req_h request = comm->recv_nb(
@@ -640,6 +681,25 @@ c10::intrusive_ptr<ProcessGroup> ProcessGroupUCC::createProcessGroupUCC(
     int size,
     const std::chrono::duration<float>& timeout) {
   return c10::make_intrusive<ProcessGroupUCC>(store, rank, size);
+}
+
+void ProcessGroupUCC::initComm(c10::Device dev) {
+  if (!comm) {
+    comm = CommPG::get_comm(comm_id, dev);
+    comm->ucx_connect_eps(eps, rank_, size_, store_);
+    comm->ucc_create_team(team, rank_, size_, store_);
+  } else {
+    if (dev.is_cuda()) {
+      if ((comm->cuda_device_index != TORCH_UCC_DEVICE_NOT_SET) &&
+          (comm->cuda_device_index != dev.index())) {
+        LOG(ERROR)
+            << "ucc communicator was initialized with different cuda device,"
+            << "multi device is not supported";
+        throw std::runtime_error(ucc_status_string(UCC_ERR_NOT_SUPPORTED));
+      }
+      comm->cuda_device_index = dev.index();
+    }
+  }
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
