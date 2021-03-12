@@ -101,7 +101,7 @@ void ProcessGroupUCC::WorkUCC::finalize() {
   }
 }
 
-CommUCX::CommUCX() {
+CommUCX::CommUCX(int comm_size) {
   ucp_params_t params;
   ucp_config_t* config;
   ucs_status_t st;
@@ -118,7 +118,7 @@ CommUCX::CommUCX() {
       UCP_PARAM_FIELD_REQUEST_INIT | UCP_PARAM_FIELD_REQUEST_CLEANUP;
   params.request_size = sizeof(ucc_coll_req_t);
   params.features = UCP_FEATURE_TAG;
-  params.estimated_num_eps = 1; // TODO
+  params.estimated_num_eps = comm_size;
   params.tag_sender_mask = TORCH_UCX_RANK_MASK;
   params.request_init = [](void* request) {
     static_cast<ucc_coll_req_h>(request)->status = UCC_INPROGRESS;
@@ -260,7 +260,7 @@ ucc_coll_req_h CommPG::recv_nb(
   return reinterpret_cast<ucc_coll_req_h>(st);
 }
 
-CommUCC::CommUCC() {
+CommUCC::CommUCC(int comm_size) {
   ucc_lib_config_h lib_config;
   ucc_context_config_h context_config;
   ucc_lib_params_t lib_params;
@@ -285,6 +285,15 @@ CommUCC::CommUCC() {
   if (st != UCC_OK) {
     ucc_finalize(lib);
     LOG(ERROR) << "failed to read UCC context config: "
+               << ucc_status_string(st);
+    throw std::runtime_error(ucc_status_string(st));
+  }
+  st = ucc_context_config_modify(context_config, NULL, "ESTIMATED_NUM_EPS",
+                                 std::to_string(comm_size).c_str());
+  if (st != UCC_OK) {
+    ucc_context_config_release(context_config);
+    ucc_finalize(lib);
+    LOG(ERROR) << "failed to modify UCC context config: "
                << ucc_status_string(st);
     throw std::runtime_error(ucc_status_string(st));
   }
@@ -441,8 +450,6 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allgather(
 
   AllgatherWorkData* data = new AllgatherWorkData(size_);
   for (int i = 0; i < size_; i++) {
-    data->send_lengths[i] = tensor.element_size() * tensor.numel();
-    data->send_offsets[i] = 0;
     data->recv_lengths[i] = tensor.element_size() * tensor.numel();
     data->recv_offsets[i] = (uint64_t)outputTensors[0][i].data_ptr();
   }
@@ -450,12 +457,11 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allgather(
   coll.mask = UCC_COLL_ARGS_FIELD_FLAGS;
   coll.flags =
       UCC_COLL_ARGS_FLAG_COUNT_64BIT | UCC_COLL_ARGS_FLAG_DISPLACEMENTS_64BIT;
-  coll.coll_type = UCC_COLL_TYPE_ALLTOALLV;
-  coll.src.info_v.buffer = tensor.data_ptr();
-  coll.src.info_v.counts = (ucc_count_t*)data->send_lengths.data();
-  coll.src.info_v.displacements = (ucc_aint_t*)data->send_offsets.data();
-  coll.src.info_v.datatype = UCC_DT_UINT8;
-  coll.src.info_v.mem_type = ucc_mtype_map.at(tensor.device().type());
+  coll.coll_type = UCC_COLL_TYPE_ALLGATHERV;
+  coll.src.info.buffer = tensor.data_ptr();
+  coll.src.info.count = tensor.element_size() * tensor.numel();
+  coll.src.info.datatype = UCC_DT_UINT8;
+  coll.src.info.mem_type = ucc_mtype_map.at(tensor.device().type());
   coll.dst.info_v.buffer = nullptr;
   coll.dst.info_v.counts = (ucc_count_t*)data->recv_lengths.data();
   coll.dst.info_v.displacements = (ucc_aint_t*)data->recv_offsets.data();
@@ -481,10 +487,12 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allreduce(
   initComm(tensor.device());
 
   ucc_coll_args_t coll;
+  coll.mask = UCC_COLL_ARGS_FIELD_PREDEFINED_REDUCTIONS |
+              UCC_COLL_ARGS_FIELD_FLAGS;
+  coll.flags = UCC_COLL_ARGS_FLAG_IN_PLACE;
   coll.coll_type = UCC_COLL_TYPE_ALLREDUCE;
-  coll.mask = UCC_COLL_ARGS_FIELD_PREDEFINED_REDUCTIONS;
   coll.reduce.predefined_op = ucc_op_map.at(opts.reduceOp);
-  coll.src.info.buffer = tensor.data_ptr();
+  coll.src.info.buffer = nullptr;
   coll.src.info.count = tensor.numel();
   coll.src.info.datatype = ucc_dtype_map.at(tensor.scalar_type());
   coll.src.info.mem_type = ucc_mtype_map.at(tensor.device().type());
@@ -526,6 +534,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::alltoall_base(
         (outputTensor.size(0) % size_ == 0) &&
             (inputTensor.size(0) % size_ == 0),
         "Tensor's dim 0 does not divide equally across group size");
+    coll.mask = 0;
     coll.coll_type = UCC_COLL_TYPE_ALLTOALL;
     coll.src.info.buffer = inputTensor.data_ptr();
     coll.src.info.count =
@@ -570,6 +579,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::barrier(
   initComm(c10::DeviceType::CPU);
 
   ucc_coll_args_t coll;
+  coll.mask = 0;
   coll.coll_type = UCC_COLL_TYPE_BARRIER;
   return comm->enqueue_collective(OpType::BARRIER, coll, nullptr, team);
 }
@@ -582,6 +592,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::broadcast(
   initComm(tensor.device());
 
   ucc_coll_args_t coll;
+  coll.mask = 0;
   coll.coll_type = UCC_COLL_TYPE_BCAST;
   coll.src.info.buffer = tensor.data_ptr();
   coll.src.info.count = tensor.numel();
@@ -685,7 +696,7 @@ c10::intrusive_ptr<ProcessGroup> ProcessGroupUCC::createProcessGroupUCC(
 
 void ProcessGroupUCC::initComm(c10::Device dev) {
   if (!comm) {
-    comm = CommPG::get_comm(comm_id, dev);
+    comm = CommPG::get_comm(comm_id, dev, size_);
     comm->ucx_connect_eps(eps, rank_, size_, store_);
     comm->ucc_create_team(team, rank_, size_, store_);
   } else {

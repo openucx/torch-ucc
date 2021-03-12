@@ -51,3 +51,5 @@ jobs:
         /bin/bash ./test/start_test.sh ./test/torch_allgather_test.py --backend=gloo
         echo "UCC allreduce"
         /bin/bash ./test/start_test.sh ./test/torch_allreduce_test.py --backend=gloo
+        echo "UCC broadcast"
+        /bin/bash ./test/start_test.sh ./test/torch_bcast_test.py --backend=gloo

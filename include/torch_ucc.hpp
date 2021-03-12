@@ -123,12 +123,8 @@ class ProcessGroupUCC : public ProcessGroup {
   class AllgatherWorkData : public WorkData {
    public:
     AllgatherWorkData(int size)
-        : send_lengths(size),
-          send_offsets(size),
-          recv_lengths(size),
+        : recv_lengths(size),
           recv_offsets(size) {}
-    std::vector<uint64_t> send_lengths;
-    std::vector<uint64_t> send_offsets;
     std::vector<uint64_t> recv_lengths;
     std::vector<uint64_t> recv_offsets;
   };
@@ -268,7 +264,7 @@ class CommUCX : public CommBase {
 
  public:
   void progress() override;
-  CommUCX();
+  CommUCX(int comm_size);
   ~CommUCX();
 };
 
@@ -279,7 +275,7 @@ class CommUCC : public CommBase {
 
  public:
   void progress() override;
-  CommUCC();
+  CommUCC(int comm_size);
   ~CommUCC();
 };
 
@@ -296,12 +292,16 @@ class CommPG {
 
  public:
   c10::DeviceIndex cuda_device_index;
-  CommPG(c10::Device dev) : cuda_device_index(TORCH_UCC_DEVICE_NOT_SET) {
+  CommPG(int comm_size, c10::Device dev) :
+    ucx_comm(comm_size),
+    ucc_comm(comm_size),
+    cuda_device_index(TORCH_UCC_DEVICE_NOT_SET) {
     if (dev.is_cuda()) {
       cuda_device_index = dev.index();
     }
     stop_progress_loop = false;
     progress_thread = std::thread(&CommPG::progress_loop, this);
+    pthread_setname_np(progress_thread.native_handle(), "ucc-progress");
   }
   ~CommPG() {
     std::unique_lock<std::mutex> lock(mutex);
@@ -373,7 +373,7 @@ class CommPG {
     return work;
   }
 
-  static std::shared_ptr<CommPG> get_comm(uint32_t& id, c10::Device dev) {
+  static std::shared_ptr<CommPG> get_comm(uint32_t& id, c10::Device dev, int comm_size) {
     static std::mutex m;
     static std::weak_ptr<CommPG> comm;
     static uint32_t comm_id;
@@ -382,7 +382,7 @@ class CommPG {
     id = (comm_id++ % TORCH_UCX_COMM_BITS);
     std::shared_ptr<CommPG> shared_comm = comm.lock();
     if (!shared_comm) {
-      shared_comm = std::make_shared<CommPG>(dev);
+      shared_comm = std::make_shared<CommPG>(comm_size, dev);
       comm = shared_comm;
     } else {
       if (dev.is_cuda()) {
