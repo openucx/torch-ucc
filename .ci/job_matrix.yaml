@@ -2,13 +2,11 @@
 job: 'torch-ucc'
 
 registry_host: 'harbor.mellanox.com'
-# TODO change
-registry_path: '/swx-infra/torch-ucc'
-#registry_path: '/torch-ucc'
-registry_auth: '1daaea28-800e-425f-a91f-3bd3e9136eea'
+registry_path: '/torch-ucc'
+registry_auth: '05d98651-e11c-4a57-9cc6-52df79014b89'
 
-kubernetes:
-  cloud: 'swx-k8s'
+#kubernetes:
+#  cloud: 'swx-k8s'
 
 volumes:
   - { mountPath: '/hpc/local', hostPath: '/hpc/local' }
@@ -17,44 +15,85 @@ volumes:
   - { mountPath: '/.autodirect/sw/release', hostPath: '/.autodirect/sw/release' }
 
 env:
-  CUDA_VER: '11.2.1'
-  TORCH_UCC_URI_SUFFIX: '${TORCH_UCC_VERSION}/x86_64/ubuntu20.04/cuda${CUDA_VER}'
-  TORCH_UCC_ROOT_DIR: '/opt/nvidia/torch-ucc'
-  TORCH_UCC_SRC_DIR: '${TORCH_UCC_ROOT_DIR}/src'
+CUDA_VER: '11.1.1'
+#  CUDA_VER: '11.2.1'
+TORCH_UCC_URI_SUFFIX: '${TORCH_UCC_VERSION}/x86_64/centos8/cuda${CUDA_VER}'
+TORCH_UCC_DOCKER_IMAGE_NAME: '${registry_host}${registry_path}/${TORCH_UCC_URI_SUFFIX}'
+TORCH_UCC_ROOT_DIR: '/opt/nvidia/torch-ucc'
+TORCH_UCC_SRC_DIR: '${TORCH_UCC_ROOT_DIR}/src'
+XCCL_BUILD_TYPE: 'debug'
+
+docker_opt: '--pull always --network=host --uts=host --ipc=host --ulimit stack=67108864 --ulimit memlock=-1 --security-opt seccomp=unconfined --cap-add=SYS_ADMIN --device=/dev/infiniband/ --gpus all --user root'
 
 runs_on_dockers:
   - {
-    file: '.ci/Dockerfile.ubuntu20.04',
-    name: 'ubuntu20.04',
-    tag: 'latest',
+    file: '.ci/Dockerfile.centos8',
+    name: 'centos8',
+    tag: '${BUILD_NUMBER}',
     arch: 'x86_64',
     uri: '${TORCH_UCC_URI_SUFFIX}',
     build_args: '--rm --no-cache --build-arg CUDA_VER=${CUDA_VER} --build-arg TORCH_UCC_ROOT_DIR=${TORCH_UCC_ROOT_DIR}',
+    cloud: 'swx-k8s',
+    nodeLabel: 'swx-clx01 || swx-clx02',
   }
 
+# bare metal
+#runs_on_agents:
+#  - nodeLabel: 'swx-clx01 || swx-clx02'
+
 # TODO debug
-timeout_minutes: '180'
+timeout_minutes: '400'
 
 steps:
   #============================================================================
   - name: Check Env
+    #agentSelector: "{nodeLabel: 'swx-clx01 || swx-clx02'}"
     run: |
       echo "INFO: check environment"
+      hostname
       printenv
       cat /proc/1/cgroup
       cat /etc/*release*
       id
       find /opt/nvidia
+      ibv_devinfo
+      nvidia-smi
+      nvidia-smi topo -m
   #============================================================================
   - name: Run XCCL tests
+    #agentSelector: "{nodeLabel: 'swx-clx01 || swx-clx02'}"
     run: |
       echo "INFO: Run XCCL tests"
+      hostname
+      cat /proc/1/cgroup
       ${TORCH_UCC_SRC_DIR}/.ci/scripts/run_tests_xccl.sh
-      #sleep 10000
-  #============================================================================
+    #============================================================================
   - name: Run Torch-UCC tests
+    #agentSelector: "{nodeLabel: 'swx-clx01 || swx-clx02'}"
     run: |
       echo "INFO: Run Torch-UCC tests"
+      hostname
+      cat /proc/1/cgroup
       ${TORCH_UCC_SRC_DIR}/.ci/scripts/run_tests_torch_ucc.sh
-      #sleep 20000
-  #============================================================================
+#============================================================================
+#  - name: Run FB DLRM tests
+#    #agentSelector: "{nodeLabel: 'swx-clx01 || swx-clx02'}"
+#    run: |
+#      echo "INFO: Run FB DLRM tests"
+#      printenv
+#      cat /proc/1/cgroup
+#      cat /etc/*release*
+#      id
+#      find /opt/nvidia
+#      #ibv_devinfo
+#      #nvidia-smi
+#      #${WORKSPACE}/.ci/scripts/run_fb_dlrm_docker.sh
+#============================================================================
+#  - name: Run PARAM benchmarks
+#    agentSelector: "{nodeLabel: 'swx-clx01 || swx-clx02'}"
+#    run: |
+#      echo "INFO: Run PARAM benchmarks"
+#      hostname
+#      cat /proc/1/cgroup
+#      #${TORCH_UCC_SRC_DIR}/.ci/scripts/run_param_benchmarks.sh
+#============================================================================
