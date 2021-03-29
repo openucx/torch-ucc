@@ -16,41 +16,41 @@ ENV UCC_INSTALL_DIR=${TORCH_UCC_BIN_DIR}/ucc/build
 ENV TORCH_UCC_PYTHON_VENV_DIR=${TORCH_UCC_BIN_DIR}/python/venv
 #==============================================================================
 RUN mkdir -p ${TORCH_UCC_SRC_DIR} && \
-mkdir -p ${TORCH_UCC_PKG_DIR} && \
-mkdir -p ${TORCH_UCC_BIN_DIR} && \
-mkdir -p ${TORCH_UCC_WORKLOADS_DIR} && \
-mkdir -p ${TORCH_UCC_PYTHON_VENV_DIR}
+    mkdir -p ${TORCH_UCC_PKG_DIR} && \
+    mkdir -p ${TORCH_UCC_BIN_DIR} && \
+    mkdir -p ${TORCH_UCC_WORKLOADS_DIR} && \
+    mkdir -p ${TORCH_UCC_PYTHON_VENV_DIR}
 
 COPY . ${TORCH_UCC_SRC_DIR}
 #==============================================================================
 RUN yum groupinstall -y \
-'Development Tools' \
-'Infiniband Support'
+    'Development Tools' \
+    'Infiniband Support'
 RUN yum config-manager --set-enabled powertools && yum install -y \
-cmake \
-numactl \
-numactl-devel \
-openmpi \
-openmpi-devel \
-openssh-server \
-protobuf-compiler \
-protobuf-devel \
-python36-devel \
-rdma-core-devel \
-vim
+    cmake \
+    numactl \
+    numactl-devel \
+    openmpi \
+    openmpi-devel \
+    openssh-server \
+    protobuf-compiler \
+    protobuf-devel \
+    python36-devel \
+    rdma-core-devel \
+    vim
 # Remove old UCX
 RUN rpm -e --nodeps ucx
 ENV PATH=/usr/lib64/openmpi/bin:$PATH
 RUN echo "export PATH=\"/usr/lib64/openmpi/bin:\$PATH\"" >> /etc/bashrc && \
-export LD_LIBRARY_PATH=\"/usr/lib64/openmpi/lib:\${LD_LIBRARY_PATH}\" >> /etc/bashrc
+    export LD_LIBRARY_PATH=\"/usr/lib64/openmpi/lib:\${LD_LIBRARY_PATH}\" >> /etc/bashrc
 #==============================================================================
 # Configure SSH
 RUN mkdir -p /var/run/sshd && \
-cat /etc/ssh/ssh_config | grep -v StrictHostKeyChecking > /etc/ssh/ssh_config.new && \
-echo "    StrictHostKeyChecking no" >> /etc/ssh/ssh_config.new && \
-mv /etc/ssh/ssh_config.new /etc/ssh/ssh_config && \
-ssh-keygen -A &&  \
-rm -f /run/nologin
+    cat /etc/ssh/ssh_config | grep -v StrictHostKeyChecking > /etc/ssh/ssh_config.new && \
+    echo "    StrictHostKeyChecking no" >> /etc/ssh/ssh_config.new && \
+    mv /etc/ssh/ssh_config.new /etc/ssh/ssh_config && \
+    ssh-keygen -A &&  \
+    rm -f /run/nologin
 #==============================================================================
 # Build UCX
 RUN ${TORCH_UCC_SRC_DIR}/.ci/scripts/build_ucx.sh
@@ -72,13 +72,13 @@ RUN ${TORCH_UCC_SRC_DIR}/.ci/scripts/install_torch.sh
 # TODO upstream the patches (if needed)
 WORKDIR ${TORCH_UCC_WORKLOADS_DIR}
 RUN git clone https://github.com/facebookresearch/dlrm.git && \
-cd ${TORCH_UCC_WORKLOADS_DIR}/dlrm && \
-git apply ${TORCH_UCC_SRC_DIR}/.ci/patches/dlrm/0001-Added-torch_ucc-support.patch && \
-git apply ${TORCH_UCC_SRC_DIR}/.ci/patches/dlrm/0002-Fixed-arg-list.patch && \
-pip3 install -r ${TORCH_UCC_WORKLOADS_DIR}/dlrm/requirements.txt && \
-pip3 install tensorboard
+    cd ${TORCH_UCC_WORKLOADS_DIR}/dlrm && \
+    git apply ${TORCH_UCC_SRC_DIR}/.ci/patches/dlrm/0001-Added-torch_ucc-support.patch && \
+    git apply ${TORCH_UCC_SRC_DIR}/.ci/patches/dlrm/0002-Fixed-arg-list.patch && \
+    pip3 install -r ${TORCH_UCC_WORKLOADS_DIR}/dlrm/requirements.txt && \
+    pip3 install tensorboard
 RUN git clone https://github.com/facebookresearch/param.git && \
-pip3 install -r ${TORCH_UCC_WORKLOADS_DIR}/param/requirements.txt
+    pip3 install -r ${TORCH_UCC_WORKLOADS_DIR}/param/requirements.txt
 #==============================================================================
 # Install torch_ucc (XCCL version) python module and build a wheel package
 RUN ${TORCH_UCC_SRC_DIR}/.ci/scripts/install_torch_xccl.sh

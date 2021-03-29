@@ -9,71 +9,71 @@ registry_auth: '05d98651-e11c-4a57-9cc6-52df79014b89'
 #  cloud: 'swx-k8s'
 
 volumes:
-- { mountPath: '/hpc/local', hostPath: '/hpc/local' }
-- { mountPath: '/auto/sw_tools', hostPath: '/auto/sw_tools' }
-- { mountPath: '/.autodirect/mtrswgwork', hostPath: '/.autodirect/mtrswgwork' }
-- { mountPath: '/.autodirect/sw/release', hostPath: '/.autodirect/sw/release' }
+  - { mountPath: '/hpc/local', hostPath: '/hpc/local' }
+  - { mountPath: '/auto/sw_tools', hostPath: '/auto/sw_tools' }
+  - { mountPath: '/.autodirect/mtrswgwork', hostPath: '/.autodirect/mtrswgwork' }
+  - { mountPath: '/.autodirect/sw/release', hostPath: '/.autodirect/sw/release' }
 
 env:
-CUDA_VER: '11.2.1'
-TORCH_UCC_URI_SUFFIX: '${TORCH_UCC_VERSION}/x86_64/centos8/cuda${CUDA_VER}'
-TORCH_UCC_DOCKER_IMAGE_NAME: '${registry_host}${registry_path}/${TORCH_UCC_URI_SUFFIX}'
-TORCH_UCC_ROOT_DIR: '/opt/nvidia/torch-ucc'
-TORCH_UCC_SRC_DIR: '${TORCH_UCC_ROOT_DIR}/src'
-TORCH_UCC_BIN_DIR: '${TORCH_UCC_ROOT_DIR}/bin'
-TORCH_UCC_PYTHON_VENV_DIR: '${TORCH_UCC_BIN_DIR}/python/venv'
-XCCL_BUILD_TYPE: 'debug'
+  CUDA_VER: '11.2.1'
+  TORCH_UCC_URI_SUFFIX: '${TORCH_UCC_VERSION}/x86_64/centos8/cuda${CUDA_VER}'
+  TORCH_UCC_DOCKER_IMAGE_NAME: '${registry_host}${registry_path}/${TORCH_UCC_URI_SUFFIX}'
+  TORCH_UCC_ROOT_DIR: '/opt/nvidia/torch-ucc'
+  TORCH_UCC_SRC_DIR: '${TORCH_UCC_ROOT_DIR}/src'
+  TORCH_UCC_BIN_DIR: '${TORCH_UCC_ROOT_DIR}/bin'
+  TORCH_UCC_PYTHON_VENV_DIR: '${TORCH_UCC_BIN_DIR}/python/venv'
+  XCCL_BUILD_TYPE: 'debug'
 
 docker_opt: '--pull always --network=host --uts=host --ipc=host --ulimit stack=67108864 --ulimit memlock=-1 --security-opt seccomp=unconfined --cap-add=SYS_ADMIN --device=/dev/infiniband/ --gpus all --user root'
 
 runs_on_dockers:
-- {
-file: '.ci/Dockerfile.centos8',
-name: 'centos8',
-tag: '${BUILD_NUMBER}',
-arch: 'x86_64',
-uri: '${TORCH_UCC_URI_SUFFIX}',
-build_args: '--rm --no-cache --build-arg CUDA_VER=${CUDA_VER} --build-arg TORCH_UCC_ROOT_DIR=${TORCH_UCC_ROOT_DIR}',
-cloud: 'swx-k8s',
-nodeLabel: 'swx-clx01 || swx-clx02',
-}
+  - {
+    file: '.ci/Dockerfile.centos8',
+    name: 'centos8',
+    tag: '${BUILD_NUMBER}',
+    arch: 'x86_64',
+    uri: '${TORCH_UCC_URI_SUFFIX}',
+    build_args: '--rm --no-cache --build-arg CUDA_VER=${CUDA_VER} --build-arg TORCH_UCC_ROOT_DIR=${TORCH_UCC_ROOT_DIR}',
+    cloud: 'swx-k8s',
+    nodeLabel: 'swx-clx01 || swx-clx02',
+  }
 
 # bare metal
 runs_on_agents:
-- nodeLabel: 'swx-clx01 || swx-clx02'
+  - nodeLabel: 'swx-clx01 || swx-clx02'
 
 # TODO debug
 timeout_minutes: '400'
 
 steps:
-#============================================================================
-- name: Check Env
-agentSelector: "{nodeLabel: 'swx-clx01 || swx-clx02'}"
-containerSelector: "{name:'centos8'}"
-run: |
-echo "INFO: check environment"
-hostname
-printenv
-cat /proc/1/cgroup
-cat /etc/*release*
-id
-#find /opt/nvidia
-#ibv_devinfo
-#nvidia-smi
-#nvidia-smi topo -m
-#============================================================================
-- name: Run XCCL tests
-#agentSelector: "{nodeLabel: 'swx-clx01 || swx-clx02'}"
-containerSelector: "{name:'centos8'}"
-run: |
-echo "INFO: Run XCCL tests"
-. "${TORCH_UCC_PYTHON_VENV_DIR}/xccl/bin/activate"
-hostname
-cat /proc/1/cgroup
-pip3 list | grep torch
-${TORCH_UCC_SRC_DIR}/.ci/scripts/run_tests_xccl.sh
-deactivate
-#============================================================================
+  #============================================================================
+  - name: Check Env
+    agentSelector: "{nodeLabel: 'swx-clx01 || swx-clx02'}"
+    containerSelector: "{name:'centos8'}"
+    run: |
+      echo "INFO: check environment"
+      hostname
+      printenv
+      cat /proc/1/cgroup
+      cat /etc/*release*
+      id
+      #find /opt/nvidia
+      #ibv_devinfo
+      #nvidia-smi
+      #nvidia-smi topo -m
+  #============================================================================
+  - name: Run XCCL tests
+    #agentSelector: "{nodeLabel: 'swx-clx01 || swx-clx02'}"
+    containerSelector: "{name:'centos8'}"
+    run: |
+      echo "INFO: Run XCCL tests"
+      . "${TORCH_UCC_PYTHON_VENV_DIR}/xccl/bin/activate"
+      hostname
+      cat /proc/1/cgroup
+      pip3 list | grep torch
+      ${TORCH_UCC_SRC_DIR}/.ci/scripts/run_tests_xccl.sh
+      deactivate
+  #============================================================================
 #  - name: Run UCC tests
 #    #agentSelector: "{nodeLabel: 'swx-clx01 || swx-clx02'}"
 #    containerSelector: "{name:'centos8'}"
@@ -85,59 +85,59 @@ deactivate
 #      pip3 list | grep torch
 #      ${TORCH_UCC_SRC_DIR}/.ci/scripts/run_tests_ucc.sh
 #      deactivate
-#============================================================================
-- name: Run Torch-UCC tests (XCCL)
-#agentSelector: "{nodeLabel: 'swx-clx01 || swx-clx02'}"
-containerSelector: "{name:'centos8'}"
-run: |
-echo "INFO: Run Torch-UCC tests (XCCL)"
-. "${TORCH_UCC_PYTHON_VENV_DIR}/xccl/bin/activate"
-hostname
-cat /proc/1/cgroup
-pip3 list | grep torch
-${TORCH_UCC_SRC_DIR}/.ci/scripts/run_tests_torch_xccl.sh
-deactivate
-#============================================================================
-- name: Run Torch-UCC tests (UCC)
-#agentSelector: "{nodeLabel: 'swx-clx01 || swx-clx02'}"
-containerSelector: "{name:'centos8'}"
-run: |
-echo "INFO: Run Torch-UCC tests (UCC)"
-. "${TORCH_UCC_PYTHON_VENV_DIR}/ucc/bin/activate"
-hostname
-cat /proc/1/cgroup
-pip3 list | grep torch
-${TORCH_UCC_SRC_DIR}/.ci/scripts/run_tests_torch_ucc.sh
-deactivate
-#============================================================================
-- name: Run DLRM tests (XCCL/GPU)
-agentSelector: "{nodeLabel: 'swx-clx01 || swx-clx02'}"
-run: |
-echo "INFO: Run DLRM tests (XCCL/GPU)"
-hostname
-printenv
-cat /proc/1/cgroup
-cat /etc/*release*
-id
-find /opt/nvidia
-ibv_devinfo
-nvidia-smi
-${WORKSPACE}/.ci/scripts/run_dlrm_docker.sh xccl
-#============================================================================
-- name: Run DLRM tests (UCC/GPU)
-agentSelector: "{nodeLabel: 'swx-clx01 || swx-clx02'}"
-run: |
-echo "INFO: Run DLRM tests (UCC/GPU)"
-hostname
-printenv
-cat /proc/1/cgroup
-cat /etc/*release*
-id
-find /opt/nvidia
-ibv_devinfo
-nvidia-smi
-${WORKSPACE}/.ci/scripts/run_dlrm_docker.sh ucc
-#============================================================================
+  #============================================================================
+  - name: Run Torch-UCC tests (XCCL)
+    #agentSelector: "{nodeLabel: 'swx-clx01 || swx-clx02'}"
+    containerSelector: "{name:'centos8'}"
+    run: |
+      echo "INFO: Run Torch-UCC tests (XCCL)"
+      . "${TORCH_UCC_PYTHON_VENV_DIR}/xccl/bin/activate"
+      hostname
+      cat /proc/1/cgroup
+      pip3 list | grep torch
+      ${TORCH_UCC_SRC_DIR}/.ci/scripts/run_tests_torch_xccl.sh
+      deactivate
+  #============================================================================
+  - name: Run Torch-UCC tests (UCC)
+    #agentSelector: "{nodeLabel: 'swx-clx01 || swx-clx02'}"
+    containerSelector: "{name:'centos8'}"
+    run: |
+      echo "INFO: Run Torch-UCC tests (UCC)"
+      . "${TORCH_UCC_PYTHON_VENV_DIR}/ucc/bin/activate"
+      hostname
+      cat /proc/1/cgroup
+      pip3 list | grep torch
+      ${TORCH_UCC_SRC_DIR}/.ci/scripts/run_tests_torch_ucc.sh
+      deactivate
+  #============================================================================
+  - name: Run DLRM tests (XCCL/GPU)
+    agentSelector: "{nodeLabel: 'swx-clx01 || swx-clx02'}"
+    run: |
+      echo "INFO: Run DLRM tests (XCCL/GPU)"
+      hostname
+      printenv
+      cat /proc/1/cgroup
+      cat /etc/*release*
+      id
+      find /opt/nvidia
+      ibv_devinfo
+      nvidia-smi
+      ${WORKSPACE}/.ci/scripts/run_dlrm_docker.sh xccl
+  #============================================================================
+  - name: Run DLRM tests (UCC/GPU)
+    agentSelector: "{nodeLabel: 'swx-clx01 || swx-clx02'}"
+    run: |
+      echo "INFO: Run DLRM tests (UCC/GPU)"
+      hostname
+      printenv
+      cat /proc/1/cgroup
+      cat /etc/*release*
+      id
+      find /opt/nvidia
+      ibv_devinfo
+      nvidia-smi
+      ${WORKSPACE}/.ci/scripts/run_dlrm_docker.sh ucc
+  #============================================================================
 #  - name: Run PARAM benchmarks
 #    agentSelector: "{nodeLabel: 'swx-clx01 || swx-clx02'}"
 #    run: |
@@ -145,4 +145,4 @@ ${WORKSPACE}/.ci/scripts/run_dlrm_docker.sh ucc
 #      hostname
 #      cat /proc/1/cgroup
 #      #${TORCH_UCC_SRC_DIR}/.ci/scripts/run_param_benchmarks.sh
-#============================================================================
+  #============================================================================
