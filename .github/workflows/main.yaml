@@ -4,7 +4,7 @@ on: [push, pull_request]
 
 env:
   OPENUCX_LINK: https://github.com/openucx/ucx.git
-  XCCL_LINK: https://github.com/openucx/xccl.git
+  UCC_LINK: https://github.com/openucx/ucc.git
 
 jobs:
   tests:
@@ -25,32 +25,31 @@ jobs:
         ./autogen.sh
         ./contrib/configure-release-mt --without-java --disable-numa --prefix=/opt/ucx
         make -j install
-    - name: Get XCCL
+    - name: Get UCC
       run: |
-        git clone ${XCCL_LINK} /tmp/xccl
-        cd /tmp/xccl
+        git clone ${UCC_LINK} /tmp/ucc
+        cd /tmp/ucc
         ./autogen.sh
-        ./configure --with-ucx=/opt/ucx --prefix=/opt/xccl
+        ./configure --with-ucx=/opt/ucx --prefix=/opt/ucc
         make -j install
     - uses: actions/checkout@v1
-    - name: Build with UCX and XCCL
+    - name: Build with UCX and UCC
       run: |
-        UCX_HOME=/opt/ucx/ XCCL_HOME=/opt/xccl/ WITH_CUDA=no python setup.py install
+        UCX_HOME=/opt/ucx/ UCC_HOME=/opt/ucc/ WITH_CUDA=no python setup.py install
     - name: Tests
       run: |
-        export LD_LIBRARY_PATH=/opt/ucx/lib:/opt/xccl/lib:$LD_LIBRARY_PATH
-        export TORCH_UCC_XCCL_TLS=ucx
+        export LD_LIBRARY_PATH=/opt/ucx/lib:/opt/ucc/lib:$LD_LIBRARY_PATH
         /opt/ucx/bin/ucx_info -e -u t
         export UCX_LOG_LEVEL=info
-        echo "XCCL allreduce"
-        /bin/bash ./test/start_test.sh ./test/torch_allreduce_test.py --backend=gloo
-        echo "XCCL alltoall"
-        /bin/bash ./test/start_test.sh ./test/torch_alltoall_test.py --backend=gloo
-        echo "XCCL alltoallv"
-        /bin/bash ./test/start_test.sh ./test/torch_alltoallv_test.py --backend=gloo
-        echo "XCCL barrier"
+        echo "UCC barrier"
         /bin/bash ./test/start_test.sh ./test/torch_barrier_test.py --backend=gloo
-        echo "XCCL allgather"
+        echo "UCC alltoall"
+        /bin/bash ./test/start_test.sh ./test/torch_alltoall_test.py --backend=gloo
+        echo "UCC alltoallv"
+        /bin/bash ./test/start_test.sh ./test/torch_alltoallv_test.py --backend=gloo
+        echo "UCC allgather"
         /bin/bash ./test/start_test.sh ./test/torch_allgather_test.py --backend=gloo
-        echo "XCCL broadcast"
+        echo "UCC allreduce"
+        /bin/bash ./test/start_test.sh ./test/torch_allreduce_test.py --backend=gloo
+        echo "UCC broadcast"
         /bin/bash ./test/start_test.sh ./test/torch_bcast_test.py --backend=gloo

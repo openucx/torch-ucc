@@ -3,6 +3,7 @@
 #
 
 from torch_ucc_test_setup import *
+import torch.autograd.profiler as profiler
 import numpy as np
 
 args = parse_test_args()
@@ -25,15 +26,14 @@ for count in counts:
     recv_tensor = get_tensor(output_size[comm_rank], args.use_cuda)
     recv_tensor_test = get_tensor(output_size[comm_rank], args.use_cuda)
     dist.all_to_all_single(recv_tensor, send_tensor,
-                           split[:, comm_rank],
-                           split[comm_rank, :])
+                          split[:, comm_rank],
+                          split[comm_rank, :])
     dist.all_to_all_single(recv_tensor_test, send_tensor,
-                           split[:, comm_rank],
-                           split[comm_rank, :],
-                           group=pg)
+                          split[:, comm_rank],
+                          split[comm_rank, :],
+                          group=pg)
     status = check_tensor_equal(recv_tensor, recv_tensor_test)
     dist.all_reduce(status, group=pg)
     print_test_result(status, "{}({})".format(count, input_size[comm_rank]), comm_rank, comm_size)
-
 if comm_rank == 0:
     print("Test alltoallv: succeeded")

@@ -1,5 +1,6 @@
 #
-# Copyright (C) Mellanox Technologies Ltd. 2001-2020.  ALL RIGHTS RESERVED.
+# Copyright (C) Mellanox Technologies Ltd. 2020-2021.  ALL RIGHTS RESERVED.
+# See file LICENSE for terms.
 #
 
 import os
@@ -10,14 +11,12 @@ from torch.utils import cpp_extension
 ucc_plugin_dir = os.path.dirname(os.path.abspath(__file__))
 ucx_home = os.environ.get("UCX_HOME")
 if ucx_home is None:
-  ucx_home = os.environ.get("HPCX_UCX_DIR")
-if ucx_home is None:
   print("Couldn't find UCX install dir, please set UCX_HOME env variable")
   sys.exit(1)
 
-xccl_home = os.environ.get("XCCL_HOME")
-if xccl_home is None:
-  print("Couldn't find XCCL install dir, please set XCCL_HOME env variable")
+ucc_home = os.environ.get("UCC_HOME")
+if ucc_home is None:
+  print("Couldn't find UCC install dir, please set UCC_HOME env variable")
   sys.exit(1)
 
 plugin_compile_args = []
@@ -28,15 +27,13 @@ else:
   print("Debug build")
   plugin_compile_args.extend(["-g", "-O0"])
 
-plugin_sources      = ["src/torch_ucc.cpp",
-                       "src/torch_ucc_sendrecv.cpp",
-                       "src/torch_xccl.cpp"]
+plugin_sources      = ["src/torch_ucc.cpp"]
 plugin_include_dirs = ["{}/include/".format(ucc_plugin_dir),
                        "{}/include/".format(ucx_home),
-                       "{}/include/".format(xccl_home)]
+                       "{}/include/".format(ucc_home)]
 plugin_library_dirs = ["{}/lib/".format(ucx_home),
-                       "{}/lib/".format(xccl_home)]
-plugin_libraries    = ["ucp", "uct", "ucm", "ucs", "xccl"]
+                       "{}/lib/".format(ucc_home)]
+plugin_libraries    = ["ucp", "uct", "ucm", "ucs", "ucc"]
 
 with_cuda = os.environ.get("WITH_CUDA")
 if with_cuda is None or with_cuda == "no":
@@ -60,10 +57,9 @@ else:
         libraries = plugin_libraries,
         extra_compile_args=plugin_compile_args
     )
-
 setup(
     name = "torch-ucc",
-    version = "0.1.0",
+    version = "1.0.0",
     ext_modules = [module],
     cmdclass={'build_ext': cpp_extension.BuildExtension}
 )

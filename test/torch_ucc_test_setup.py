@@ -9,11 +9,11 @@ import torch_ucc
 import sys
 import os
 
-
 def parse_test_args():
     parser = argparse.ArgumentParser(description="PG UCC Test")
     parser.add_argument("--backend", type=str, default='mpi')
     parser.add_argument("--use-cuda", default=False, action='store_true')
+    parser.add_argument("--enable-prof",default=False, action='store_true')
     args = parser.parse_args()
 
     if args.use_cuda and not torch.cuda.is_available():
