@@ -2,6 +2,7 @@
 # Copyright (C) Mellanox Technologies Ltd. 2001-2020.  ALL RIGHTS RESERVED.
 #
 
+import time
 from torch_ucc_test_setup import *
 
 args = parse_test_args()
@@ -16,10 +17,12 @@ for i in range(20):
 
 print_test_head("Alltoall", comm_rank)
 for count in counts:
-    send_tensor = get_tensor(count, args.use_cuda)
     recv_tensor_ucc = get_tensor(count, args.use_cuda)
     recv_tensor_test = get_tensor(count, args.use_cuda)
-    dist.all_to_all_single(recv_tensor_ucc, send_tensor)
+    send_tensor = get_tensor(count, args.use_cuda)
+    send_tensor = do_compute(send_tensor)
+    req = dist.all_to_all_single(recv_tensor_ucc, send_tensor, async_op = True)
+    req.wait()
     dist.all_to_all_single(recv_tensor_test, send_tensor, group=pg)
     status = check_tensor_equal(recv_tensor_ucc, recv_tensor_test)
     dist.all_reduce(status, group=pg)

@@ -16,6 +16,8 @@ print_test_head("Broadcast", comm_rank)
 for count in counts:
     tensor_ucc = get_tensor(count, args.use_cuda)
     tensor_test = tensor_ucc.clone()
+    tensor_ucc = do_compute(tensor_ucc)
+    tensor_test = do_compute(tensor_test)
     dist.broadcast(tensor_ucc, 0)
     dist.broadcast(tensor_test, 0, group=pg)
     status = check_tensor_equal(tensor_ucc, tensor_test)

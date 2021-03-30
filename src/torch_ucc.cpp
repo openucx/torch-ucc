@@ -50,6 +50,37 @@ const std::map<ReduceOp, ucc_reduction_op_t> ucc_op_map = {
     {ReduceOp::BXOR, UCC_OP_BXOR},
 };
 
+struct torch_ucc_config_t {
+  std::once_flag flag;
+  std::array<bool, 32> blocking_wait;
+} torch_ucc_config;
+
+void read_confg() {
+  char* env;
+
+  torch_ucc_config.blocking_wait.fill(true);
+  env = std::getenv("TORCH_UCC_ALLGATHER_BLOCKING_WAIT");
+  if (env) {
+    torch_ucc_config.blocking_wait[(std::uint8_t)OpType::ALLGATHER] =
+        std::atoi(env);
+  }
+  env = std::getenv("TORCH_UCC_ALLREDUCE_BLOCKING_WAIT");
+  if (env) {
+    torch_ucc_config.blocking_wait[(std::uint8_t)OpType::ALLREDUCE] =
+        std::atoi(env);
+  }
+  env = std::getenv("TORCH_UCC_ALLTOALL_BLOCKING_WAIT");
+  if (env) {
+    torch_ucc_config.blocking_wait[(std::uint8_t)OpType::ALLTOALL_BASE] =
+        std::atoi(env);
+  }
+  env = std::getenv("TORCH_UCC_BCAST_BLOCKING_WAIT");
+  if (env) {
+    torch_ucc_config.blocking_wait[(std::uint8_t)OpType::BROADCAST] =
+        std::atoi(env);
+  }
+}
+
 void check_device(c10::Device dev1, c10::Device dev2) {
   if (dev1.is_cuda() && dev2.is_cuda() && dev1 != dev2) {
     throw std::runtime_error("ProcessGroupUCC multidevice is not supported");
@@ -75,7 +106,7 @@ ProcessGroupUCC::WorkUCC::~WorkUCC() {
 }
 
 bool ProcessGroupUCC::WorkUCC::isCompleted() {
-  return (status_ != UCC_INPROGRESS);
+  return ((status_ == UCC_OK) || (status_ < 0));
 }
 
 bool ProcessGroupUCC::WorkUCC::isSuccess() const {
@@ -83,6 +114,14 @@ bool ProcessGroupUCC::WorkUCC::isSuccess() const {
 }
 
 bool ProcessGroupUCC::WorkUCC::wait(std::chrono::milliseconds /* unused */) {
+#ifdef USE_CUDA
+  if (fence && !torch_ucc_config.blocking_wait[(int)opType_]) {
+    // block user stream
+    fence->block(at::cuda::getCurrentCUDAStream());
+    return true;
+  }
+#endif
+  // wait for complete
   while (!isCompleted())
     ;
   return true;
@@ -260,7 +299,65 @@ ucc_coll_req_h CommPG::recv_nb(
   return reinterpret_cast<ucc_coll_req_h>(st);
 }
 
-CommUCC::CommUCC(int comm_size) {
+static ucc_status_t oob_allgather(
+    void* sbuf,
+    void* rbuf,
+    size_t msglen,
+    void* coll_info,
+    void** req) {
+  torch_ucc_oob_coll_info_t* info =
+      reinterpret_cast<torch_ucc_oob_coll_info_t*>(coll_info);
+  std::vector<uint8_t> val = std::vector<uint8_t>(
+      reinterpret_cast<uint8_t*>(sbuf),
+      reinterpret_cast<uint8_t*>(sbuf) + msglen);
+  info->store->set("teamr" + std::to_string(info->rank), val);
+  info->rbuf = rbuf;
+  info->msglen = msglen;
+  *req = coll_info;
+  return UCC_OK;
+}
+
+static ucc_status_t oob_allgather_test(void* req) {
+  torch_ucc_oob_coll_info_t* info =
+      reinterpret_cast<torch_ucc_oob_coll_info_t*>(req);
+
+  for (int r = 0; r < info->size; r++) {
+    if (!(info->store->check({"teamr" + std::to_string(r)}))) {
+      return UCC_INPROGRESS;
+    }
+  }
+  for (int r = 0; r < info->size; r++) {
+    std::vector<uint8_t> data =
+        info->store->get("teamr" + std::to_string(r));
+    memcpy(
+        (void*)((ptrdiff_t)info->rbuf + info->msglen * r),
+        data.data(),
+        info->msglen);
+  }
+  return UCC_OK;
+}
+
+static ucc_status_t oob_allgather_free(void* req) {
+  torch_ucc_oob_coll_info_t* info =
+      reinterpret_cast<torch_ucc_oob_coll_info_t*>(req);
+  int num_done = info->store->add({"team_ag_done"}, 1);
+  if (num_done == info->size) {
+    info->store->deleteKey("team_ag_done");
+    for (int r = 0; r < info->size; r++) {
+      info->store->deleteKey("teamr" + std::to_string(r));
+    }
+    for (int r = 0; r < info->size; r++) {
+      info->store->add({"team_ag_finished" + std::to_string(r)}, 1);
+    }
+  } else {
+    info->store->wait({"team_ag_finished" + std::to_string(info->rank)});
+  }
+  info->store->deleteKey("team_ag_finished" + std::to_string(info->rank));
+
+  return UCC_OK;
+}
+
+CommUCC::CommUCC(torch_ucc_oob_coll_info_t* oob_info) {
   ucc_lib_config_h lib_config;
   ucc_context_config_h context_config;
   ucc_lib_params_t lib_params;
@@ -274,7 +371,7 @@ CommUCC::CommUCC(int comm_size) {
   }
   memset(&lib_params, 0, sizeof(ucc_lib_params_t));
   lib_params.mask = UCC_LIB_PARAM_FIELD_THREAD_MODE;
-  lib_params.thread_mode = UCC_THREAD_SINGLE;
+  lib_params.thread_mode = UCC_THREAD_MULTIPLE;
   st = ucc_init(&lib_params, lib_config, &lib);
   ucc_lib_config_release(lib_config);
   if (st != UCC_OK) {
@@ -288,8 +385,11 @@ CommUCC::CommUCC(int comm_size) {
                << ucc_status_string(st);
     throw std::runtime_error(ucc_status_string(st));
   }
-  st = ucc_context_config_modify(context_config, NULL, "ESTIMATED_NUM_EPS",
-                                 std::to_string(comm_size).c_str());
+  st = ucc_context_config_modify(
+      context_config,
+      NULL,
+      "ESTIMATED_NUM_EPS",
+      std::to_string(oob_info->size).c_str());
   if (st != UCC_OK) {
     ucc_context_config_release(context_config);
     ucc_finalize(lib);
@@ -298,8 +398,13 @@ CommUCC::CommUCC(int comm_size) {
     throw std::runtime_error(ucc_status_string(st));
   }
   memset(&context_params, 0, sizeof(ucc_context_params_t));
-  context_params.mask = UCC_CONTEXT_PARAM_FIELD_TYPE;
-  context_params.ctx_type = UCC_CONTEXT_SHARED;
+  context_params.mask =
+      UCC_CONTEXT_PARAM_FIELD_TYPE | UCC_CONTEXT_PARAM_FIELD_OOB;
+  context_params.type = UCC_CONTEXT_SHARED;
+  context_params.oob.allgather = oob_allgather;
+  context_params.oob.req_test = oob_allgather_test;
+  context_params.oob.req_free = oob_allgather_free;
+  context_params.oob.coll_info = oob_info;
   ucc_context_create(lib, &context_params, context_config, &context);
   ucc_context_config_release(context_config);
   if (st != UCC_OK) {
@@ -318,96 +423,22 @@ CommUCC::~CommUCC() {
   ucc_finalize(lib);
 }
 
-struct torch_ucc_oob_coll_info_t {
-  const c10::intrusive_ptr<Store>* store;
-  int rank;
-  int size;
-  void* rbuf;
-  size_t msglen;
-};
-
-static ucc_status_t oob_allgather(
-    void* sbuf,
-    void* rbuf,
-    size_t msglen,
-    void* coll_info,
-    void** req) {
-  torch_ucc_oob_coll_info_t* info =
-      reinterpret_cast<torch_ucc_oob_coll_info_t*>(coll_info);
-  std::vector<uint8_t> val = std::vector<uint8_t>(
-      reinterpret_cast<uint8_t*>(sbuf),
-      reinterpret_cast<uint8_t*>(sbuf) + msglen);
-  (*info->store)->set("teamr" + std::to_string(info->rank), val);
-  info->rbuf = rbuf;
-  info->msglen = msglen;
-  *req = coll_info;
-  return UCC_OK;
-}
-
-static ucc_status_t oob_allgather_test(void* req) {
-  torch_ucc_oob_coll_info_t* info =
-      reinterpret_cast<torch_ucc_oob_coll_info_t*>(req);
-
-  for (int r = 0; r < info->size; r++) {
-    if (!((*info->store)->check({"teamr" + std::to_string(r)}))) {
-      return UCC_INPROGRESS;
-    }
-  }
-  for (int r = 0; r < info->size; r++) {
-    std::vector<uint8_t> data =
-        (*info->store)->get("teamr" + std::to_string(r));
-    memcpy(
-        (void*)((ptrdiff_t)info->rbuf + info->msglen * r),
-        data.data(),
-        info->msglen);
-  }
-  return UCC_OK;
-}
-
-static ucc_status_t oob_allgather_free(void* req) {
-  torch_ucc_oob_coll_info_t* info =
-      reinterpret_cast<torch_ucc_oob_coll_info_t*>(req);
-  int num_done = (*info->store)->add({"team_ag_done"}, 1);
-  if (num_done == info->size) {
-    (*info->store)->deleteKey("team_ag_done");
-    for (int r = 0; r < info->size; r++) {
-      if (r != info->rank) {
-        (*info->store)->add({"team_ag_finished" + std::to_string(r)}, 1);
-      }
-    }
-  } else {
-    (*info->store)->wait({"team_ag_finished" + std::to_string(info->rank)});
-  }
-  (*info->store)->deleteKey("teamr" + std::to_string(info->rank));
-  (*info->store)->deleteKey("team_ag_finished" + std::to_string(info->rank));
-
-  return UCC_OK;
-}
-
 void CommPG::ucc_create_team(
     ucc_team_h& team,
-    int rank,
-    int size,
-    const c10::intrusive_ptr<Store>& store) {
+    torch_ucc_oob_coll_info_t* oob_info) {
   ucc_status_t st;
   ucc_team_params_t team_params;
-  torch_ucc_oob_coll_info_t* coll_info = new torch_ucc_oob_coll_info_t;
-
-  coll_info->rank = rank;
-  coll_info->size = size;
-  coll_info->store = &store;
   team_params.mask = UCC_TEAM_PARAM_FIELD_EP | UCC_TEAM_PARAM_FIELD_EP_RANGE |
       UCC_TEAM_PARAM_FIELD_OOB;
   team_params.oob.allgather = oob_allgather;
   team_params.oob.req_test = oob_allgather_test;
   team_params.oob.req_free = oob_allgather_free;
-  team_params.oob.coll_info = coll_info;
-  team_params.oob.participants = size;
-  team_params.ep = rank;
+  team_params.oob.coll_info = oob_info;
+  team_params.oob.participants = oob_info->size;
+  team_params.ep = oob_info->rank;
   team_params.ep_range = UCC_COLLECTIVE_EP_RANGE_CONTIG;
   st = ucc_team_create_post(&ucc_comm.context, 1, &team_params, &team);
   if (st != UCC_OK) {
-    delete coll_info;
     LOG(ERROR) << "failed to post team create: " << ucc_status_string(st);
     throw std::runtime_error(ucc_status_string(st));
   }
@@ -415,12 +446,9 @@ void CommPG::ucc_create_team(
     st = ucc_team_create_test(team);
   } while (st == UCC_INPROGRESS);
   if (st != UCC_OK) {
-    delete coll_info;
     LOG(ERROR) << "failed to create UCC team: " << ucc_status_string(st);
     throw std::runtime_error(ucc_status_string(st));
   }
-  // TODO: don't delete
-  delete coll_info;
 }
 
 void CommPG::ucc_destroy_team(ucc_team_h& team) {
@@ -431,13 +459,44 @@ ProcessGroupUCC::ProcessGroupUCC(
     const c10::intrusive_ptr<Store>& store,
     int rank,
     int size)
-    : ProcessGroup(rank, size), store_(store) {
+    : ProcessGroup(rank, size) {
+  std::call_once(torch_ucc_config.flag, read_confg);
+  oob.rank = rank;
+  oob.size = size;
+  oob.store = store;
   comm = nullptr;
+  cuda_ee = nullptr;
 }
 
 ProcessGroupUCC::~ProcessGroupUCC() {
-  comm->ucc_destroy_team(team);
-  comm->ucx_disconnect_eps(eps, store_);
+  if (comm) {
+    comm->ucc_destroy_team(team);
+    comm->ucx_disconnect_eps(eps, oob.store);
+    if (cuda_ee) {
+      ucc_ee_destroy(cuda_ee);
+    }
+    comm = nullptr;
+  }
+}
+
+c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::collective_post(
+    OpType opType,
+    ucc_coll_args_t& coll,
+    std::unique_ptr<ProcessGroupUCC::WorkData> data,
+    c10::Device dev) {
+#ifdef USE_CUDA
+  if (dev.is_cuda()) {
+    auto cuda_ev = std::make_unique<at::cuda::CUDAEvent>();
+    cuda_ev->record(at::cuda::getCurrentCUDAStream(dev.index()));
+    cuda_ev->block(*stream);
+    auto work = comm->enqueue_cuda_collective(
+        opType, coll, std::move(data), team, cuda_ee);
+    cuda_ev->record(*stream);
+    work->fence = std::move(cuda_ev);
+    return work;
+  }
+#endif
+  return comm->enqueue_collective(opType, coll, std::move(data), team);
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allgather(
@@ -468,8 +527,11 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allgather(
   coll.dst.info_v.datatype = UCC_DT_UINT8;
   coll.dst.info_v.mem_type =
       ucc_mtype_map.at(outputTensors[0][0].device().type());
-  return comm->enqueue_collective(
-      OpType::ALLGATHER, coll, std::unique_ptr<WorkData>(data), team);
+  return collective_post(
+      OpType::ALLGATHER,
+      coll,
+      std::unique_ptr<WorkData>(data),
+      tensor.device());
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allgather_base(
@@ -500,7 +562,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allreduce(
   coll.dst.info.count = tensor.numel();
   coll.dst.info.datatype = ucc_dtype_map.at(tensor.scalar_type());
   coll.dst.info.mem_type = ucc_mtype_map.at(tensor.device().type());
-  return comm->enqueue_collective(OpType::ALLREDUCE, coll, nullptr, team);
+  return collective_post(OpType::ALLREDUCE, coll, nullptr, tensor.device());
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allreduce_coalesced(
@@ -570,8 +632,11 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::alltoall_base(
     coll.dst.info_v.datatype = ucc_dtype_map.at(outputTensor.scalar_type());
     coll.dst.info_v.mem_type = ucc_mtype_map.at(outputTensor.device().type());
   }
-  return comm->enqueue_collective(
-      OpType::ALLTOALL_BASE, coll, std::unique_ptr<WorkData>(data), team);
+  return collective_post(
+      OpType::ALLTOALL_BASE,
+      coll,
+      std::unique_ptr<WorkData>(data),
+      inputTensor.device());
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::barrier(
@@ -581,7 +646,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::barrier(
   ucc_coll_args_t coll;
   coll.mask = 0;
   coll.coll_type = UCC_COLL_TYPE_BARRIER;
-  return comm->enqueue_collective(OpType::BARRIER, coll, nullptr, team);
+  return collective_post(OpType::BARRIER, coll, nullptr, c10::DeviceType::CPU);
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::broadcast(
@@ -599,7 +664,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::broadcast(
   coll.src.info.datatype = ucc_dtype_map.at(tensor.scalar_type());
   coll.src.info.mem_type = ucc_mtype_map.at(tensor.device().type());
   coll.root = opts.rootRank;
-  return comm->enqueue_collective(OpType::BROADCAST, coll, nullptr, team);
+  return collective_post(OpType::BROADCAST, coll, nullptr, tensor.device());
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::gather(
@@ -696,21 +761,37 @@ c10::intrusive_ptr<ProcessGroup> ProcessGroupUCC::createProcessGroupUCC(
 
 void ProcessGroupUCC::initComm(c10::Device dev) {
   if (!comm) {
-    comm = CommPG::get_comm(comm_id, dev, size_);
-    comm->ucx_connect_eps(eps, rank_, size_, store_);
-    comm->ucc_create_team(team, rank_, size_, store_);
+    comm = CommPG::get_comm(comm_id, dev, &oob);
+    comm->ucx_connect_eps(eps, rank_, size_, oob.store);
+    comm->ucc_create_team(team, &oob);
   } else {
     if (dev.is_cuda()) {
       if ((comm->cuda_device_index != TORCH_UCC_DEVICE_NOT_SET) &&
           (comm->cuda_device_index != dev.index())) {
         LOG(ERROR)
-            << "ucc communicator was initialized with different cuda device,"
+            << "ucc communicator was initialized with different cuda device, "
             << "multi device is not supported";
         throw std::runtime_error(ucc_status_string(UCC_ERR_NOT_SUPPORTED));
       }
       comm->cuda_device_index = dev.index();
     }
   }
+#ifdef USE_CUDA
+  if (!cuda_ee && dev.is_cuda()) {
+    ucc_status_t st;
+    stream = std::make_unique<at::cuda::CUDAStream>(
+        at::cuda::getStreamFromPool(false, dev.index()));
+    ucc_ee_params_t params;
+    params.ee_type = UCC_EE_CUDA_STREAM;
+    params.ee_context = (void*)stream->stream();
+    params.ee_context_size = sizeof(cudaStream_t);
+    st = ucc_ee_create(team, &params, &cuda_ee);
+    if (st != UCC_OK) {
+      LOG(ERROR) << "failed to create UCC EE: " << ucc_status_string(st);
+      throw std::runtime_error(ucc_status_string(st));
+    }
+  }
+#endif
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {

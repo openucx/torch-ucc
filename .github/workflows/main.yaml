@@ -21,7 +21,7 @@ jobs:
     - name: Get UCX
       run: |
         git clone ${OPENUCX_LINK} /tmp/ucx
-        cd /tmp/ucx && git checkout v1.10.x &&
+        cd /tmp/ucx &&
         ./autogen.sh
         ./contrib/configure-release-mt --without-java --disable-numa --prefix=/opt/ucx
         make -j install
