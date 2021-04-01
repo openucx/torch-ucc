@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include "torch_ucc_comm.hpp"
 #include <torch/python.h>
 
 #include <exception>
@@ -21,32 +22,10 @@
 #include <ATen/cuda/CUDAEvent.h>
 #include <c10/cuda/CUDAStream.h>
 #endif
-#include <ucc/api/ucc.h>
-#include <ucp/api/ucp.h>
 
 namespace c10d {
 
 #define TORCH_UCC_DEVICE_NOT_SET -2
-#define TORCH_UCX_COMM_BITS 15
-#define TORCH_UCX_RANK_BITS 16
-#define TORCH_UCX_TAG_BITS 32
-#define TORCH_UCX_OOB_BITS 1
-
-#define TORCH_UCX_COMM_BITS_OFFSET 0
-#define TORCH_UCX_RANK_BITS_OFFSET TORCH_UCX_COMM_BITS
-#define TORCH_UCX_TAG_BITS_OFFSET (TORCH_UCX_COMM_BITS + TORCH_UCX_RANK_BITS)
-#define TORCH_UCX_OOB_BITS_OFFSET \
-  (TORCH_UCX_COMM_BITS + TORCH_UCX_RANK_BITS + TORCH_UCX_TAG_BITS)
-
-#define TORCH_UCX_MAX_COMM ((((uint64_t)1) << TORCH_UCX_COMM_BITS) - 1)
-#define TORCH_UCX_MAX_RANK ((((uint64_t)1) << TORCH_UCX_RANK_BITS) - 1)
-#define TORCH_UCX_MAX_TAG ((((uint64_t)1) << TORCH_UCX_TAG_BITS) - 1)
-#define TORCH_UCX_MAX_OOB ((((uint64_t)1) << TORCH_UCX_OOB_BITS) - 1)
-
-#define TORCH_UCX_COMM_MASK (TORCH_UCX_MAX_COMM << TORCH_UCX_COMM_BITS_OFFSET)
-#define TORCH_UCX_RANK_MASK (TORCH_UCX_MAX_RANK << TORCH_UCX_RANK_BITS_OFFSET)
-#define TORCH_UCX_TAG_MASK (TORCH_UCX_MAX_TAG << TORCH_UCX_TAG_BITS_OFFSET)
-#define TORCH_UCX_OOB_MASK (TORCH_UCX_MAX_OOB << TORCH_UCX_OOB_BITS_OFFSET)
 
 #define TORCH_UCX_MAKE_P2P_TAG(_tag, _rank, _comm)       \
   ((((uint64_t)(_tag)) << TORCH_UCX_TAG_BITS_OFFSET) |   \
@@ -92,21 +71,6 @@ namespace c10d {
 enum torch_ucx_tag_type_t { TORCH_UCX_P2P_TAG, TORCH_UCX_OOB_TAG };
 
 class CommPG;
-
-class CommBase {
- public:
-  CommBase() {}
-  virtual void progress() = 0;
-  virtual ~CommBase() {}
-};
-
-struct torch_ucc_oob_coll_info_t {
-  c10::intrusive_ptr<Store> store;
-  int rank;
-  int size;
-  void* rbuf;
-  size_t msglen;
-};
 
 class ProcessGroupUCC : public ProcessGroup {
  public:
@@ -278,28 +242,6 @@ class ProcessGroupUCC : public ProcessGroup {
 #endif
 };
 
-class CommUCX : public CommBase {
- public:
-  ucp_context_h context;
-  ucp_worker_h worker;
-
- public:
-  void progress() override;
-  CommUCX(int comm_size);
-  ~CommUCX();
-};
-
-class CommUCC : public CommBase {
- public:
-  ucc_lib_h lib;
-  ucc_context_h context;
-
- public:
-  void progress() override;
-  CommUCC(torch_ucc_oob_coll_info_t* oob_info);
-  ~CommUCC();
-};
-
 class CommPG {
   CommUCX ucx_comm;
   CommUCC ucc_comm;
@@ -314,25 +256,9 @@ class CommPG {
  public:
   c10::DeviceIndex cuda_device_index;
   CommPG(torch_ucc_oob_coll_info_t* oob_info,
-      c10::Device dev)
-      : ucx_comm(oob_info->size),
-        ucc_comm(oob_info),
-        cuda_device_index(TORCH_UCC_DEVICE_NOT_SET) {
-    if (dev.is_cuda()) {
-      cuda_device_index = dev.index();
-    }
-    stop_progress_loop = false;
-    progress_thread = std::thread(&CommPG::progress_loop, this);
-    pthread_setname_np(progress_thread.native_handle(), "ucc-progress");
-  }
-  ~CommPG() {
-    std::unique_lock<std::mutex> lock(mutex);
-    queue_consume_cv.wait(lock, [&] { return progress_queue.empty(); });
-    stop_progress_loop = true;
-    lock.unlock();
-    queue_produce_cv.notify_all();
-    progress_thread.join();
-  }
+      c10::Device dev);
+
+  ~CommPG();
 
   void ucx_connect_eps(
       std::vector<ucp_ep_h>& eps,
@@ -352,20 +278,7 @@ class CommPG {
 
   c10::intrusive_ptr<ProcessGroup::Work> enqueue_p2p(
       OpType opType,
-      ucc_coll_req_h request) {
-    if (request == nullptr) {
-      // p2p2 request completed immediately don't save it to progress queue
-      return c10::make_intrusive<ProcessGroupUCC::WorkUCC>(
-          opType, UCC_OK, request, nullptr, &ucx_comm);
-    }
-    std::unique_lock<std::mutex> lock(mutex);
-    auto work = c10::make_intrusive<ProcessGroupUCC::WorkUCC>(
-        opType, UCC_INPROGRESS, request, nullptr, &ucx_comm);
-    progress_queue.push_back(work);
-    lock.unlock();
-    queue_produce_cv.notify_one();
-    return work;
-  }
+      ucc_coll_req_h request);
 
 #ifdef USE_CUDA
   c10::intrusive_ptr<ProcessGroupUCC::WorkUCC> enqueue_cuda_collective(
@@ -373,124 +286,21 @@ class CommPG {
       ucc_coll_args_t& coll,
       std::unique_ptr<ProcessGroupUCC::WorkData> data,
       ucc_team_h& team,
-      ucc_ee_h ee) {
-    std::unique_lock<std::mutex> lock(mutex);
-    ucc_coll_req_h request;
-    ucc_status_t st;
-    st = ucc_collective_init(&coll, &request, team);
-    if (st != UCC_OK) {
-      LOG(ERROR) << "failed to init collective: " << ucc_status_string(st);
-      throw std::runtime_error(ucc_status_string(st));
-    }
-    ucc_ev_t comp_ev, *post_ev;
-    comp_ev.ev_type = UCC_EVENT_COMPUTE_COMPLETE;
-    comp_ev.ev_context = nullptr;
-    comp_ev.ev_context_size = 0;
-    comp_ev.req = request;
-    st = ucc_collective_triggered_post(ee, &comp_ev);
-    if (st != UCC_OK) {
-      LOG(ERROR) << "failed to post triggered collective: "
-                 << ucc_status_string(st);
-      throw std::runtime_error(ucc_status_string(st));
-    }
-    st = ucc_ee_get_event(ee, &post_ev);
-    TORCH_CHECK(st == UCC_OK && post_ev->ev_type == UCC_EVENT_COLLECTIVE_POST);
-    ucc_ee_ack_event(ee, post_ev);
-    auto work = c10::make_intrusive<ProcessGroupUCC::WorkUCC>(
-        opType, UCC_INPROGRESS, request, ee, &ucc_comm);
-    work->data = std::move(data);
-    progress_queue.push_back(work);
-    lock.unlock();
-    queue_produce_cv.notify_one();
-    return work;
-  }
+      ucc_ee_h ee);
 #endif
 
   c10::intrusive_ptr<ProcessGroupUCC::WorkUCC> enqueue_collective(
       OpType opType,
       ucc_coll_args_t& coll,
       std::unique_ptr<ProcessGroupUCC::WorkData> data,
-      ucc_team_h& team) {
-    std::unique_lock<std::mutex> lock(mutex);
-    ucc_coll_req_h request;
-    ucc_status_t st;
-    st = ucc_collective_init(&coll, &request, team);
-    if (st != UCC_OK) {
-      LOG(ERROR) << "failed to init collective: " << ucc_status_string(st);
-      throw std::runtime_error(ucc_status_string(st));
-    }
-    st = ucc_collective_post(request);
-    if (st != UCC_OK) {
-      LOG(ERROR) << "failed to post collective: " << ucc_status_string(st);
-      throw std::runtime_error(ucc_status_string(st));
-    }
-    auto work = c10::make_intrusive<ProcessGroupUCC::WorkUCC>(
-        opType, UCC_INPROGRESS, request, nullptr, &ucc_comm);
-    work->data = std::move(data);
-    progress_queue.push_back(work);
-    lock.unlock();
-    queue_produce_cv.notify_one();
-    return work;
-  }
+      ucc_team_h& team);
 
   static std::shared_ptr<CommPG> get_comm(
       uint32_t& id,
       c10::Device dev,
-      torch_ucc_oob_coll_info_t *oob) {
-    static std::mutex m;
-    static std::weak_ptr<CommPG> comm;
-    static uint32_t comm_id;
+      torch_ucc_oob_coll_info_t *oob);
 
-    std::lock_guard<std::mutex> lock(m);
-    id = (comm_id++ % TORCH_UCX_COMM_BITS);
-    std::shared_ptr<CommPG> shared_comm = comm.lock();
-    if (!shared_comm) {
-      shared_comm = std::make_shared<CommPG>(oob, dev);
-      comm = shared_comm;
-    } else {
-      if (dev.is_cuda()) {
-        if ((shared_comm->cuda_device_index != TORCH_UCC_DEVICE_NOT_SET) &&
-            (shared_comm->cuda_device_index != dev.index())) {
-          LOG(ERROR)
-              << "ucc communicator was initialized with different cuda device,"
-              << "multi device is not supported";
-          throw std::runtime_error(ucc_status_string(UCC_ERR_NOT_SUPPORTED));
-        }
-        shared_comm->cuda_device_index = dev.index();
-      }
-    }
-    return shared_comm;
-  }
-
-  void progress_loop() {
-    std::unique_lock<std::mutex> lock(mutex);
-#ifdef USE_CUDA
-    bool device_set = false;
-#endif
-    while (!stop_progress_loop) {
-      if (progress_queue.empty()) {
-        queue_produce_cv.wait(lock);
-        continue;
-      }
-      auto work = progress_queue.front();
-      progress_queue.pop_front();
-      lock.unlock();
-      queue_consume_cv.notify_one();
-#ifdef USE_CUDA
-      if ((!device_set) && (cuda_device_index != TORCH_UCC_DEVICE_NOT_SET)) {
-        c10::cuda::set_device(cuda_device_index);
-        device_set = true;
-      }
-#endif
-      while (work->request_->status > 0) {
-        // operation initialized is in progress or
-        work->comm_->progress();
-      }
-
-      lock.lock();
-      work->finalize();
-    }
-  }
+  void progress_loop();
 
   ucc_coll_req_h send_nb(
       ucp_ep_h ep,
