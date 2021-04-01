@@ -135,6 +135,20 @@ CommUCC::CommUCC(torch_ucc_oob_coll_info_t* oob_info) {
     LOG(ERROR) << "failed to init UCC lib: " << ucc_status_string(st);
     throw std::runtime_error(ucc_status_string(st));
   }
+#if 0
+  ucc_lib_attr_t lib_attr;
+  lib_attr.mask = UCC_LIB_ATTR_FIELD_THREAD_MODE;
+  st = ucc_lib_get_attr(lib, &lib_attr);
+  if (st != UCC_OK) {
+    LOG(ERROR) << "failed to query for lib attr: " << ucc_status_string(st);
+    throw std::runtime_error(ucc_status_string(st));
+  }
+  if (lib_attr.thread_mode != UCC_THREAD_MULTIPLE) {
+    LOG(ERROR) << "ucc library wasn't initialized with mt support "
+               << "check ucc compile options ";
+    throw std::runtime_error("failed to init ucc lib");
+  }
+#endif
   st = ucc_context_config_read(lib, NULL, &context_config);
   if (st != UCC_OK) {
     ucc_finalize(lib);
