@@ -77,7 +77,7 @@ class ProcessGroupUCC : public ProcessGroup {
   class WorkData {
    public:
     WorkData() {}
-    virtual ~WorkData() {}
+    virtual ~WorkData() = default;
   };
   class AlltoallWorkData : public WorkData {
    public:

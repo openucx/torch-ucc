@@ -358,6 +358,7 @@ c10::intrusive_ptr<ProcessGroupUCC::WorkUCC> CommPG::enqueue_collective(
   std::unique_lock<std::mutex> lock(mutex);
   ucc_coll_req_h request;
   ucc_status_t st;
+
   st = ucc_collective_init(&coll, &request, team);
   if (st != UCC_OK) {
     LOG(ERROR) << "failed to init collective: " << ucc_status_string(st);
@@ -443,6 +444,7 @@ void CommPG::progress_loop() {
 
     lock.lock();
     work->finalize();
+    work->data.reset();
   }
 }
 
@@ -602,7 +604,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::alltoall_base(
     coll.dst.info.datatype = UCC_DT_UINT8;
     coll.dst.info.mem_type = ucc_mtype_map.at(outputTensor.device().type());
   } else {
-    AlltoallWorkData* data = new AlltoallWorkData(size_);
+    data = new AlltoallWorkData(size_);
     c10d::checkSplitSizes(inputSplitSizes, inputTensor, size_);
     c10d::checkSplitSizes(outputSplitSizes, outputTensor, size_);
     computeLengthsAndOffsets(
