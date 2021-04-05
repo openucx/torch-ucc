@@ -471,6 +471,11 @@ ProcessGroupUCC::~ProcessGroupUCC() {
       ucc_ee_destroy(cuda_ee);
     }
     comm = nullptr;
+    if ((size_t)oob.store->add("ucc_pg_closed", 1) == eps.size()) {
+      oob.store->add("ucc_pg_finished", 1);
+    } else {
+      oob.store->wait({"ucc_pg_finished"});
+    }
   }
 }
 
