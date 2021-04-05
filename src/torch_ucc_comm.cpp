@@ -170,6 +170,7 @@ CommUCC::CommUCC(torch_ucc_oob_coll_info_t* oob_info) {
   context_params.mask =
       UCC_CONTEXT_PARAM_FIELD_TYPE | UCC_CONTEXT_PARAM_FIELD_OOB;
   context_params.type = UCC_CONTEXT_SHARED;
+  context_params.oob.participants = oob_info->size;
   context_params.oob.allgather = oob_allgather;
   context_params.oob.req_test = oob_allgather_test;
   context_params.oob.req_free = oob_allgather_free;
