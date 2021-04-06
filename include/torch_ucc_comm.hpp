@@ -35,10 +35,14 @@ namespace c10d {
 
 struct torch_ucc_oob_coll_info_t {
   c10::intrusive_ptr<Store> store;
+  uint32_t comm_id;
   int rank;
   int size;
   void* rbuf;
   size_t msglen;
+  std::string getKey(std::string key) {
+    return std::to_string(comm_id)+key;
+  }
 };
 
 class CommBase {

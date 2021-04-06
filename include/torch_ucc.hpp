@@ -76,6 +76,8 @@ class ProcessGroupUCC : public ProcessGroup {
  public:
   class WorkData {
    public:
+    std::vector<at::Tensor> src;
+    std::vector<at::Tensor> dst;
     WorkData() {}
     virtual ~WorkData() = default;
   };
@@ -262,13 +264,11 @@ class CommPG {
 
   void ucx_connect_eps(
       std::vector<ucp_ep_h>& eps,
-      int rank,
-      int size,
-      const c10::intrusive_ptr<Store>& store);
+      torch_ucc_oob_coll_info_t* oob);
 
   void ucx_disconnect_eps(
       std::vector<ucp_ep_h>& eps,
-      const c10::intrusive_ptr<Store>& store);
+      torch_ucc_oob_coll_info_t* oob);
 
   void ucc_create_team(
       ucc_team_h& team,

@@ -67,7 +67,7 @@ ucc_status_t oob_allgather(
   std::vector<uint8_t> val = std::vector<uint8_t>(
       reinterpret_cast<uint8_t*>(sbuf),
       reinterpret_cast<uint8_t*>(sbuf) + msglen);
-  info->store->set("teamr" + std::to_string(info->rank), val);
+  info->store->set(info->getKey("teamr" + std::to_string(info->rank)), val);
   info->rbuf = rbuf;
   info->msglen = msglen;
   *req = coll_info;
@@ -79,13 +79,13 @@ ucc_status_t oob_allgather_test(void* req) {
       reinterpret_cast<torch_ucc_oob_coll_info_t*>(req);
 
   for (int r = 0; r < info->size; r++) {
-    if (!(info->store->check({"teamr" + std::to_string(r)}))) {
+    if (!info->store->check({info->getKey("teamr" + std::to_string(r))})) {
       return UCC_INPROGRESS;
     }
   }
   for (int r = 0; r < info->size; r++) {
     std::vector<uint8_t> data =
-        info->store->get("teamr" + std::to_string(r));
+        info->store->get(info->getKey("teamr" + std::to_string(r)));
     memcpy(
         (void*)((ptrdiff_t)info->rbuf + info->msglen * r),
         data.data(),
@@ -97,19 +97,19 @@ ucc_status_t oob_allgather_test(void* req) {
 ucc_status_t oob_allgather_free(void* req) {
   torch_ucc_oob_coll_info_t* info =
       reinterpret_cast<torch_ucc_oob_coll_info_t*>(req);
-  int num_done = info->store->add({"team_ag_done"}, 1);
+  int num_done = info->store->add({info->getKey("ag_done")}, 1);
   if (num_done == info->size) {
-    info->store->deleteKey("team_ag_done");
+    info->store->deleteKey(info->getKey("ag_done"));
     for (int r = 0; r < info->size; r++) {
-      info->store->deleteKey("teamr" + std::to_string(r));
+      info->store->deleteKey(info->getKey("teamr" + std::to_string(r)));
     }
     for (int r = 0; r < info->size; r++) {
-      info->store->add({"team_ag_finished" + std::to_string(r)}, 1);
+      info->store->add({info->getKey("ag_free" + std::to_string(r))}, 1);
     }
   } else {
-    info->store->wait({"team_ag_finished" + std::to_string(info->rank)});
+    info->store->wait({info->getKey("ag_free" + std::to_string(info->rank))});
   }
-  info->store->deleteKey("team_ag_finished" + std::to_string(info->rank));
+  info->store->deleteKey(info->getKey("ag_free" + std::to_string(info->rank)));
 
   return UCC_OK;
 }
