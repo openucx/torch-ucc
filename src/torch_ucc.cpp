@@ -331,7 +331,13 @@ void CommPG::ucc_create_team(
 }
 
 void CommPG::ucc_destroy_team(ucc_team_h& team) {
-  ucc_team_destroy(team);
+  ucc_status_t status;
+  while (UCC_INPROGRESS == (status = ucc_team_destroy(team))) {
+    if (UCC_OK != status) {
+      LOG(ERROR) << "ucc team destroy error: " << ucc_status_string(status);
+      break;
+    }
+  }
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> CommPG::enqueue_p2p(
