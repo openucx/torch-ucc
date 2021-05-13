@@ -17,7 +17,7 @@ jobs:
         apt-get update
         apt-get install -y --no-install-recommends build-essential git cmake libtool-bin wget autoconf automake
         conda uninstall -y pytorch torchvision
-        conda install -y pytorch torchvision cpuonly -c pytorch-nightly
+        conda install -y pytorch torchvision cpuonly -c pytorch
     - name: Get UCX
       run: |
         git clone ${OPENUCX_LINK} /tmp/ucx

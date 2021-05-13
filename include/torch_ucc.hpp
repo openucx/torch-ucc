@@ -10,6 +10,8 @@
 
 #include <exception>
 #include <memory>
+#include <mutex>
+#include <queue>
 #include <vector>
 
 #include <pybind11/chrono.h>
@@ -70,6 +72,13 @@ namespace c10d {
 
 enum torch_ucx_tag_type_t { TORCH_UCX_P2P_TAG, TORCH_UCX_OOB_TAG };
 
+struct event_pool_t {
+#ifdef USE_CUDA
+  std::queue<std::unique_ptr<at::cuda::CUDAEvent>> event_pool;
+#endif
+  std::mutex event_pool_mutex;
+};
+
 class CommPG;
 
 class ProcessGroupUCC : public ProcessGroup {
@@ -125,7 +134,8 @@ class ProcessGroupUCC : public ProcessGroup {
     void finalize();
     std::unique_ptr<WorkData> data;
 #ifdef USE_CUDA
-    std::unique_ptr<at::cuda::CUDAEvent> fence;
+    std::unique_ptr<at::cuda::CUDAEvent> fence = nullptr;
+    event_pool_t* ep = nullptr;
 #endif
    protected:
     ucc_status_t status_;
@@ -240,7 +250,8 @@ class ProcessGroupUCC : public ProcessGroup {
   ucc_team_h team;
   ucc_ee_h cuda_ee;
 #ifdef USE_CUDA
-  std::unique_ptr<at::cuda::CUDAStream> stream;
+  std::unique_ptr<at::cuda::CUDAStream> stream = nullptr;
+  event_pool_t ep;
 #endif
 };
 
@@ -286,7 +297,10 @@ class CommPG {
       ucc_coll_args_t& coll,
       std::unique_ptr<ProcessGroupUCC::WorkData> data,
       ucc_team_h& team,
-      ucc_ee_h ee);
+      ucc_ee_h ee,
+      std::unique_ptr<at::cuda::CUDAEvent> cuda_ev,
+      const at::cuda::CUDAStream& stream,
+      event_pool_t* ep);
 #endif
 
   c10::intrusive_ptr<ProcessGroupUCC::WorkUCC> enqueue_collective(

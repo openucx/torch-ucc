@@ -103,6 +103,12 @@ void check_tensor(const std::vector<at::Tensor>& tensors) {
 
 ProcessGroupUCC::WorkUCC::~WorkUCC() {
   TORCH_CHECK(request_ == nullptr, "TorchUCC, request wasn't finalized");
+#ifdef USE_CUDA
+    if (fence && ep) {
+        std::lock_guard<std::mutex> lock(ep->event_pool_mutex);
+        ep->event_pool.push(std::move(fence));
+    }
+#endif
 }
 
 bool ProcessGroupUCC::WorkUCC::isCompleted() {
@@ -348,9 +354,9 @@ c10::intrusive_ptr<ProcessGroup::Work> CommPG::enqueue_p2p(
     return c10::make_intrusive<ProcessGroupUCC::WorkUCC>(
         opType, UCC_OK, request, nullptr, &ucx_comm);
   }
-  std::unique_lock<std::mutex> lock(mutex);
   auto work = c10::make_intrusive<ProcessGroupUCC::WorkUCC>(
       opType, UCC_INPROGRESS, request, nullptr, &ucx_comm);
+  std::unique_lock<std::mutex> lock(mutex);
   progress_queue.push_back(work);
   lock.unlock();
   queue_produce_cv.notify_one();
@@ -362,10 +368,9 @@ c10::intrusive_ptr<ProcessGroupUCC::WorkUCC> CommPG::enqueue_collective(
     ucc_coll_args_t& coll,
     std::unique_ptr<ProcessGroupUCC::WorkData> data,
     ucc_team_h& team) {
-  std::unique_lock<std::mutex> lock(mutex);
   ucc_coll_req_h request;
   ucc_status_t st;
-
+  std::unique_lock<std::mutex> lock(mutex);
   st = ucc_collective_init(&coll, &request, team);
   if (st != UCC_OK) {
     LOG(ERROR) << "failed to init collective: " << ucc_status_string(st);
@@ -391,10 +396,13 @@ c10::intrusive_ptr<ProcessGroupUCC::WorkUCC> CommPG::enqueue_cuda_collective(
     ucc_coll_args_t& coll,
     std::unique_ptr<ProcessGroupUCC::WorkData> data,
     ucc_team_h& team,
-    ucc_ee_h ee) {
-  std::unique_lock<std::mutex> lock(mutex);
+    ucc_ee_h ee,
+    std::unique_ptr<at::cuda::CUDAEvent> cuda_ev,
+    const at::cuda::CUDAStream& stream,
+    event_pool_t* ep) {
   ucc_coll_req_h request;
   ucc_status_t st;
+  std::unique_lock<std::mutex> lock(mutex);
   st = ucc_collective_init(&coll, &request, team);
   if (st != UCC_OK) {
     LOG(ERROR) << "failed to init collective: " << ucc_status_string(st);
@@ -417,6 +425,9 @@ c10::intrusive_ptr<ProcessGroupUCC::WorkUCC> CommPG::enqueue_cuda_collective(
   auto work = c10::make_intrusive<ProcessGroupUCC::WorkUCC>(
       opType, UCC_INPROGRESS, request, ee, &ucc_comm);
   work->data = std::move(data);
+  work->ep = ep;
+  cuda_ev->record(stream);
+  work->fence = std::move(cuda_ev);
   progress_queue.push_back(work);
   lock.unlock();
   queue_produce_cv.notify_one();
@@ -491,13 +502,20 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::collective_post(
     c10::Device dev) {
 #ifdef USE_CUDA
   if (dev.is_cuda()) {
-    auto cuda_ev = std::make_unique<at::cuda::CUDAEvent>();
+        std::unique_ptr<at::cuda::CUDAEvent> cuda_ev;
+        {
+            std::lock_guard<std::mutex> lock(ep.event_pool_mutex);
+            if (ep.event_pool.empty()) {
+            cuda_ev = std::make_unique<at::cuda::CUDAEvent>();
+            } else {
+                 cuda_ev = std::move(ep.event_pool.front());
+                ep.event_pool.pop();
+            }
+        }
     cuda_ev->record(at::cuda::getCurrentCUDAStream(dev.index()));
     cuda_ev->block(*stream);
-    auto work = comm->enqueue_cuda_collective(
-        opType, coll, std::move(data), team, cuda_ee);
-    cuda_ev->record(*stream);
-    work->fence = std::move(cuda_ev);
+    auto work = comm->enqueue_cuda_collective(opType, coll, std::move(data),
+                                    team, cuda_ee, std::move(cuda_ev), *stream, &ep);
     return work;
   }
 #endif
@@ -804,7 +822,7 @@ void ProcessGroupUCC::initComm(c10::Device dev) {
   if (!cuda_ee && dev.is_cuda()) {
     ucc_status_t st;
     stream = std::make_unique<at::cuda::CUDAStream>(
-        at::cuda::getStreamFromPool(false, dev.index()));
+        at::cuda::getStreamFromPool(true, dev.index()));
     ucc_ee_params_t params;
     params.ee_type = UCC_EE_CUDA_STREAM;
     params.ee_context = (void*)stream->stream();
