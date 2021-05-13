@@ -370,7 +370,6 @@ c10::intrusive_ptr<ProcessGroupUCC::WorkUCC> CommPG::enqueue_collective(
     ucc_team_h& team) {
   ucc_coll_req_h request;
   ucc_status_t st;
-  std::unique_lock<std::mutex> lock(mutex);
   st = ucc_collective_init(&coll, &request, team);
   if (st != UCC_OK) {
     LOG(ERROR) << "failed to init collective: " << ucc_status_string(st);
@@ -384,6 +383,7 @@ c10::intrusive_ptr<ProcessGroupUCC::WorkUCC> CommPG::enqueue_collective(
   auto work = c10::make_intrusive<ProcessGroupUCC::WorkUCC>(
       opType, UCC_INPROGRESS, request, nullptr, &ucc_comm);
   work->data = std::move(data);
+  std::unique_lock<std::mutex> lock(mutex);
   progress_queue.push_back(work);
   lock.unlock();
   queue_produce_cv.notify_one();
@@ -402,7 +402,6 @@ c10::intrusive_ptr<ProcessGroupUCC::WorkUCC> CommPG::enqueue_cuda_collective(
     event_pool_t* ep) {
   ucc_coll_req_h request;
   ucc_status_t st;
-  std::unique_lock<std::mutex> lock(mutex);
   st = ucc_collective_init(&coll, &request, team);
   if (st != UCC_OK) {
     LOG(ERROR) << "failed to init collective: " << ucc_status_string(st);
@@ -428,6 +427,7 @@ c10::intrusive_ptr<ProcessGroupUCC::WorkUCC> CommPG::enqueue_cuda_collective(
   work->ep = ep;
   cuda_ev->record(stream);
   work->fence = std::move(cuda_ev);
+  std::unique_lock<std::mutex> lock(mutex);
   progress_queue.push_back(work);
   lock.unlock();
   queue_produce_cv.notify_one();
@@ -459,10 +459,9 @@ void CommPG::progress_loop() {
       // operation initialized is in progress or
       work->comm_->progress();
     }
-
-    lock.lock();
     work->finalize();
     work->data.reset();
+    lock.lock();
   }
 }
 
