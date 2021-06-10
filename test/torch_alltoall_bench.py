@@ -55,7 +55,8 @@ if args.backend=='nccl' and not args.use_cuda:
 
 if args.use_cuda:
 #    torch.cuda.set_device(comm_rank)
-    args.device = torch.device('cuda')
+    #args.device = torch.device('cuda')
+    args.device = torch.device(f'cuda:{comm_rank}')
 else:
     args.device = torch.device('cpu')
 
