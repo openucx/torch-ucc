@@ -31,7 +31,7 @@ const std::map<torch_ucc_collective_type_t, c10d::OpType> optype_map = {
     {TORCH_UCC_ALLREDUCE, c10d::OpType::ALLREDUCE},
     {TORCH_UCC_ALLTOALL, c10d::OpType::ALLTOALL_BASE},
     {TORCH_UCC_ALLTOALLV, c10d::OpType::ALLTOALL_BASE},
-    {TORCH_UCC_ALLGATHER, c10d::OpType::ALLGATHER_BASE},
+    {TORCH_UCC_ALLGATHER, c10d::OpType::_ALLGATHER_BASE},
 };
 
 const std::map<torch_ucc_collective_type_t, const char*> torch_ucc_collective_name = {
@@ -423,7 +423,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allgather(
   return enqueue_request(coll_req, nullptr);
 }
 
-c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::allgather_base(
+c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupUCC::_allgather_base(
     at::Tensor& /* unused */,
     at::Tensor& /* unused */,
     const AllgatherOptions& /* unused */) {
